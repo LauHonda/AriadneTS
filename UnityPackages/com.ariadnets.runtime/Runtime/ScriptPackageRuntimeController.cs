@@ -16,6 +16,21 @@ namespace AriadneTS.Runtime
 
         public ScriptPackage ActivePackage => activePackage;
 
+        public void RegisterHostHandler(string method, Func<string, string> handler)
+        {
+            RequireRuntimeHost().RegisterHostHandler(method, handler);
+        }
+
+        public bool UnregisterHostHandler(string method)
+        {
+            return RequireRuntimeHost().UnregisterHostHandler(method);
+        }
+
+        public string InvokeScript(string method, string payloadJson = "null")
+        {
+            return RequireRuntimeHost().InvokeScript(method, payloadJson);
+        }
+
         private void Awake()
         {
             if (runtimeHost == null)
@@ -77,6 +92,17 @@ namespace AriadneTS.Runtime
         {
             runtimeHost.StopRuntime();
             activePackage = null;
+        }
+
+        private ScriptRuntimeHost RequireRuntimeHost()
+        {
+            if (runtimeHost == null)
+            {
+                runtimeHost = GetComponent<ScriptRuntimeHost>();
+            }
+
+            return runtimeHost ??
+                throw new InvalidOperationException("ScriptRuntimeHost is required.");
         }
     }
 }

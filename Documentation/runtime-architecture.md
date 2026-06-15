@@ -19,7 +19,10 @@ No QuickJS type may appear in a public header under `Native/include`.
 - Promise jobs run only when the host calls `ts_runtime_execute_pending_jobs`.
 - Unhandled promise rejections surface as script errors after the job queue drains.
 - Initial lifecycle calls use the synchronous JSON dispatcher
-  `globalThis.__ariadnets_invoke`. High-frequency typed bindings come later.
+  `globalThis.__ariadnets_invoke`.
+- TypeScript calls engine APIs through synchronous `host.invoke(method, payload)`.
+  Method names and payloads are engine-independent; each engine adapter routes
+  them to native framework handlers.
 - Reloading initially replaces the complete runtime instead of mutating loaded
   modules in place.
 - Unity Addressables remains outside the runtime and submits selected package
@@ -38,7 +41,8 @@ must be appended and guarded by `struct_size`.
 3. Unity lifecycle host and manual full-runtime reload. Completed.
 4. Signed in-memory package verification and atomic stateful switching.
    Unity Addressables owns download, cache, version selection, and rollback.
-5. Generated static bindings and TypeScript declarations.
+5. Synchronous engine-independent JSON host bridge. Completed.
+6. Asynchronous host requests and generated high-frequency typed bindings.
 
 ## Script Package Format
 
@@ -69,10 +73,9 @@ for ASN.1 SubjectPublicKeyInfo parsing.
 
 ## Current limitations
 
-- The only host API exposed to TypeScript is logging plus the JSON lifecycle
-  dispatcher. Framework API binding generation intentionally comes later.
-- JSON lifecycle invocation is an initial correctness path, not the final
-  high-frequency binding path.
+- The JSON host bridge is synchronous and must run on the runtime owner thread.
+- JSON invocation is a correctness and low-frequency business path, not the
+  final high-frequency binding path.
 - Source maps are emitted but runtime stack trace remapping is not implemented.
 - Linux and WebGL native plugins are not built.
 - Final plugin import behavior and cryptography support must be verified in the

@@ -55,6 +55,40 @@ static ts_status on_load_module(
     return TS_STATUS_MODULE_NOT_FOUND;
 }
 
+static ts_status on_host_invoke(
+    void* user_data,
+    const char* method,
+    size_t method_length,
+    const char* payload_json,
+    size_t payload_json_length,
+    char* result_buffer,
+    size_t result_capacity,
+    size_t* result_length
+) {
+    (void)user_data;
+
+    static const char expected_method[] = "math.double";
+    static const char expected_payload[] = "{\"value\":21}";
+    static const char result[] = "{\"value\":42}";
+    if (method_length != sizeof(expected_method) - 1 ||
+        memcmp(method, expected_method, method_length) != 0 ||
+        payload_json_length != sizeof(expected_payload) - 1 ||
+        memcmp(payload_json, expected_payload, payload_json_length) != 0) {
+        return TS_STATUS_HOST_ERROR;
+    }
+
+    *result_length = sizeof(result) - 1;
+    if (result_buffer == NULL) {
+        return TS_STATUS_OK;
+    }
+    if (result_capacity < sizeof(result) - 1) {
+        return TS_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    memcpy(result_buffer, result, sizeof(result) - 1);
+    return TS_STATUS_OK;
+}
+
 static void require_status(ts_runtime* runtime, ts_status actual, ts_status expected) {
     if (actual == expected) {
         return;
@@ -82,7 +116,9 @@ int main(void) {
         .module_load_callback = on_load_module,
         .module_load_user_data = NULL,
         .max_stack_size_bytes = 1024 * 1024,
-        .execution_timeout_milliseconds = 100
+        .execution_timeout_milliseconds = 100,
+        .host_invoke_callback = on_host_invoke,
+        .host_invoke_user_data = NULL
     };
 
     ts_runtime* runtime = ts_runtime_create(&config);
@@ -173,6 +209,31 @@ int main(void) {
     const char* result = ts_runtime_last_result(runtime, &result_length);
     if (result == NULL || result_length != 2 || memcmp(result, "42", 2) != 0) {
         fprintf(stderr, "invoke result did not match expected JSON\n");
+        ts_runtime_destroy(runtime);
+        return 1;
+    }
+
+    const char* host_invoke_script =
+        "globalThis.__ariadnets_invoke = () => "
+        "host.invoke('math.double', { value: 21 }).value;";
+    require_status(
+        runtime,
+        ts_runtime_eval_module(
+            runtime,
+            host_invoke_script,
+            strlen(host_invoke_script),
+            "host-invoke-entry.js"
+        ),
+        TS_STATUS_OK
+    );
+    require_status(
+        runtime,
+        ts_runtime_invoke(runtime, "hostInvoke", 10, "null", 4),
+        TS_STATUS_OK
+    );
+    result = ts_runtime_last_result(runtime, &result_length);
+    if (result == NULL || result_length != 2 || memcmp(result, "42", 2) != 0) {
+        fprintf(stderr, "host invoke result did not match expected JSON\n");
         ts_runtime_destroy(runtime);
         return 1;
     }

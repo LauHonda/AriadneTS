@@ -1,6 +1,6 @@
 {
   "name": "com.ariadnets.runtime",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "AriadneTS",
   "description": "Unity host for the cross-engine AriadneTS QuickJS runtime.",
   "unity": "6000.0",

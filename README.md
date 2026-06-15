@@ -49,6 +49,24 @@ Addressables owns downloading, caching, version selection, and rollback
 policy. AriadneTS owns package verification, module loading, JavaScript
 execution, and atomic runtime switching.
 
+## Engine Bridge
+
+Unity registers engine-independent synchronous JSON methods:
+
+```csharp
+controller.RegisterHostHandler("player.getName", payloadJson =>
+    "{\"name\":\"Ariadne\"}");
+```
+
+TypeScript calls them through the shared host API:
+
+```ts
+const player = host.invoke("player.getName", null) as { name: string };
+```
+
+This bridge is intended for business and framework calls. Generated typed
+bindings for high-frequency APIs are a later layer.
+
 ## Quick Start
 
 ### 1. Install The Unity Package

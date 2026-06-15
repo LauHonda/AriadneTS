@@ -38,6 +38,17 @@ typedef ts_status (*ts_module_load_callback)(
     size_t* source_length
 );
 
+typedef ts_status (*ts_host_invoke_callback)(
+    void* user_data,
+    const char* method,
+    size_t method_length,
+    const char* payload_json,
+    size_t payload_json_length,
+    char* result_buffer,
+    size_t result_capacity,
+    size_t* result_length
+);
+
 typedef struct ts_runtime_config {
     uint32_t struct_size;
     uint64_t memory_limit_bytes;
@@ -47,6 +58,8 @@ typedef struct ts_runtime_config {
     void* module_load_user_data;
     uint64_t max_stack_size_bytes;
     uint32_t execution_timeout_milliseconds;
+    ts_host_invoke_callback host_invoke_callback;
+    void* host_invoke_user_data;
 } ts_runtime_config;
 
 TSRUNTIME_API uint32_t ts_runtime_abi_version(void);

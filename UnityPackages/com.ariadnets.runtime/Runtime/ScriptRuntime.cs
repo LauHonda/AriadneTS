@@ -6,27 +6,32 @@ namespace AriadneTS.Runtime
 {
     public sealed class ScriptRuntime : IDisposable
     {
-        public const uint RequiredAbiVersion = 3;
+        public const uint RequiredAbiVersion = 4;
 
         private static readonly NativeMethods.LogCallback LogCallback = HandleLog;
         private static readonly NativeMethods.ModuleLoadCallback ModuleLoadCallback = HandleModuleLoad;
+        private static readonly NativeMethods.HostInvokeCallback HostInvokeCallback = HandleHostInvoke;
 
         private readonly Action<string> logHandler;
         private readonly Func<string, string> moduleLoader;
+        private readonly Func<string, string, string> hostInvoker;
         private readonly int ownerThreadId;
         private GCHandle selfHandle;
         private IntPtr nativeRuntime;
         private Exception pendingHostException;
+        private byte[] pendingHostResult;
 
         public ScriptRuntime(
             Action<string> logHandler,
             Func<string, string> moduleLoader = null,
             ulong memoryLimitBytes = 0,
             ulong maxStackSizeBytes = 1024 * 1024,
-            uint executionTimeoutMilliseconds = 1000)
+            uint executionTimeoutMilliseconds = 1000,
+            Func<string, string, string> hostInvoker = null)
         {
             this.logHandler = logHandler ?? throw new ArgumentNullException(nameof(logHandler));
             this.moduleLoader = moduleLoader;
+            this.hostInvoker = hostInvoker;
             ownerThreadId = Environment.CurrentManagedThreadId;
 
             var actualAbiVersion = NativeMethods.ts_runtime_abi_version();
@@ -47,6 +52,8 @@ namespace AriadneTS.Runtime
                 ModuleLoadUserData = GCHandle.ToIntPtr(selfHandle),
                 MaxStackSizeBytes = maxStackSizeBytes,
                 ExecutionTimeoutMilliseconds = executionTimeoutMilliseconds,
+                HostInvokeCallback = HostInvokeCallback,
+                HostInvokeUserData = GCHandle.ToIntPtr(selfHandle),
             };
 
             nativeRuntime = NativeMethods.ts_runtime_create(ref config);
@@ -243,6 +250,63 @@ namespace AriadneTS.Runtime
             catch (Exception exception)
             {
                 // Managed exceptions must never unwind through the native ABI.
+                runtime.pendingHostException = exception;
+                return NativeMethods.Status.HostError;
+            }
+        }
+
+#if ENABLE_IL2CPP
+        [AOT.MonoPInvokeCallback(typeof(NativeMethods.HostInvokeCallback))]
+#endif
+        private static NativeMethods.Status HandleHostInvoke(
+            IntPtr userData,
+            IntPtr method,
+            UIntPtr methodLength,
+            IntPtr payloadJson,
+            UIntPtr payloadJsonLength,
+            IntPtr resultBuffer,
+            UIntPtr resultCapacity,
+            out UIntPtr resultLength)
+        {
+            resultLength = UIntPtr.Zero;
+            var handle = GCHandle.FromIntPtr(userData);
+            if (!(handle.Target is ScriptRuntime runtime) || runtime.hostInvoker == null)
+            {
+                return NativeMethods.Status.HostError;
+            }
+
+            try
+            {
+                if (resultBuffer == IntPtr.Zero)
+                {
+                    var methodText = Marshal.PtrToStringUTF8(
+                        method,
+                        ToInt32(methodLength)) ?? string.Empty;
+                    var payloadText = Marshal.PtrToStringUTF8(
+                        payloadJson,
+                        ToInt32(payloadJsonLength)) ?? "null";
+                    var resultText = runtime.hostInvoker(methodText, payloadText) ?? "null";
+                    runtime.pendingHostResult = Encoding.UTF8.GetBytes(resultText);
+                }
+
+                var bytes = runtime.pendingHostResult ?? Encoding.UTF8.GetBytes("null");
+                resultLength = (UIntPtr)bytes.Length;
+                if (resultBuffer == IntPtr.Zero)
+                {
+                    return NativeMethods.Status.Ok;
+                }
+                if (resultCapacity.ToUInt64() < (ulong)bytes.Length)
+                {
+                    return NativeMethods.Status.BufferTooSmall;
+                }
+
+                Marshal.Copy(bytes, 0, resultBuffer, bytes.Length);
+                runtime.pendingHostResult = null;
+                return NativeMethods.Status.Ok;
+            }
+            catch (Exception exception)
+            {
+                runtime.pendingHostResult = null;
                 runtime.pendingHostException = exception;
                 return NativeMethods.Status.HostError;
             }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
 
@@ -26,8 +27,35 @@ namespace AriadneTS.Runtime
 
         private ScriptRuntime runtime;
         private Func<string, string> moduleLoader;
+        private readonly Dictionary<string, Func<string, string>> hostHandlers =
+            new Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
 
         public bool IsRunning => runtime != null;
+
+        public void RegisterHostHandler(string method, Func<string, string> handler)
+        {
+            if (string.IsNullOrWhiteSpace(method))
+            {
+                throw new ArgumentException("Host method is required.", nameof(method));
+            }
+
+            hostHandlers[method] = handler ?? throw new ArgumentNullException(nameof(handler));
+        }
+
+        public bool UnregisterHostHandler(string method)
+        {
+            return method != null && hostHandlers.Remove(method);
+        }
+
+        public string InvokeScript(string method, string payloadJson = "null")
+        {
+            if (runtime == null)
+            {
+                throw new InvalidOperationException("The script runtime is not running.");
+            }
+
+            return runtime.Invoke(method, payloadJson);
+        }
 
         public void SetAutoStart(bool value)
         {
@@ -99,7 +127,8 @@ namespace AriadneTS.Runtime
                 moduleLoader,
                 memoryLimitBytes,
                 maxStackSizeBytes,
-                executionTimeoutMilliseconds);
+                executionTimeoutMilliseconds,
+                InvokeHost);
             try
             {
                 runtime.EvaluateModule(entrySource, entryModule);
@@ -267,6 +296,16 @@ namespace AriadneTS.Runtime
             return "{\"deltaTime\":" +
                 deltaTime.ToString("R", CultureInfo.InvariantCulture) +
                 "}";
+        }
+
+        private string InvokeHost(string method, string payloadJson)
+        {
+            if (!hostHandlers.TryGetValue(method, out var handler))
+            {
+                throw new InvalidOperationException($"Unknown host method: {method}");
+            }
+
+            return handler(payloadJson) ?? "null";
         }
     }
 }

@@ -7,10 +7,17 @@ public sealed class RuntimeSmokeTest : MonoBehaviour
 
     private void Start()
     {
-        runtime = new ScriptRuntime(Debug.Log);
+        runtime = new ScriptRuntime(
+            Debug.Log,
+            hostInvoker: (method, payloadJson) =>
+            {
+                Debug.Log($"TypeScript called host method '{method}' with {payloadJson}");
+                return "{\"engine\":\"Unity\"}";
+            });
 
         runtime.Evaluate(
-            "host.log('Hello from QuickJS inside Unity');",
+            "host.log('Hello from QuickJS inside Unity');" +
+            "host.log(host.invoke('runtime.identity', null).engine);",
             "smoke-test.js");
 
         Debug.Log("Runtime smoke test passed");

@@ -38,6 +38,17 @@ namespace AriadneTS.Runtime
             UIntPtr sourceCapacity,
             out UIntPtr sourceLength);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate Status HostInvokeCallback(
+            IntPtr userData,
+            IntPtr method,
+            UIntPtr methodLength,
+            IntPtr payloadJson,
+            UIntPtr payloadJsonLength,
+            IntPtr resultBuffer,
+            UIntPtr resultCapacity,
+            out UIntPtr resultLength);
+
         [StructLayout(LayoutKind.Sequential)]
         internal struct RuntimeConfig
         {
@@ -49,6 +60,8 @@ namespace AriadneTS.Runtime
             internal IntPtr ModuleLoadUserData;
             internal ulong MaxStackSizeBytes;
             internal uint ExecutionTimeoutMilliseconds;
+            internal HostInvokeCallback HostInvokeCallback;
+            internal IntPtr HostInvokeUserData;
         }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

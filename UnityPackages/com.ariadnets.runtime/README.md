@@ -40,3 +40,23 @@ in the controller.
 
 `ScriptRuntime` can also execute modules supplied by a custom callback. This is
 useful for development tools and future engine adapters.
+
+## Host Bridge
+
+Register synchronous JSON handlers before starting a package:
+
+```csharp
+controller.RegisterHostHandler("player.getName", payloadJson =>
+    "{\"name\":\"Ariadne\"}");
+controller.StartPackage(asset);
+```
+
+TypeScript calls the same engine-independent method name:
+
+```ts
+const player = host.invoke("player.getName", null) as { name: string };
+host.log(player.name);
+```
+
+Handlers execute on the runtime owner thread. Return valid JSON and do not use
+the synchronous bridge for high-frequency per-entity calls.

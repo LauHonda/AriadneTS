@@ -14,7 +14,7 @@
 
 #include "quickjs.h"
 
-#define TS_RUNTIME_ABI_VERSION 3u
+#define TS_RUNTIME_ABI_VERSION 4u
 #define TS_DEFAULT_FILENAME "<eval>"
 
 struct ts_runtime {
@@ -24,6 +24,8 @@ struct ts_runtime {
     void* log_user_data;
     ts_module_load_callback module_load_callback;
     void* module_load_user_data;
+    ts_host_invoke_callback host_invoke_callback;
+    void* host_invoke_user_data;
     char* last_error;
     size_t last_error_length;
     char* last_result;
@@ -178,6 +180,103 @@ static JSValue host_log(
     return JS_UNDEFINED;
 }
 
+static JSValue host_invoke(
+    JSContext* context,
+    JSValueConst this_value,
+    int argument_count,
+    JSValueConst* arguments
+) {
+    (void)this_value;
+
+    ts_runtime* runtime = JS_GetContextOpaque(context);
+    if (runtime == NULL || runtime->host_invoke_callback == NULL) {
+        return JS_ThrowInternalError(context, "no host invoke callback is configured");
+    }
+    if (argument_count < 1) {
+        return JS_ThrowTypeError(context, "host.invoke requires a method name");
+    }
+
+    size_t method_length = 0;
+    const char* method = JS_ToCStringLen(context, &method_length, arguments[0]);
+    if (method == NULL) {
+        return JS_EXCEPTION;
+    }
+
+    JSValue payload = argument_count > 1 ? JS_DupValue(context, arguments[1]) : JS_NULL;
+    JSValue payload_json_value = JS_JSONStringify(context, payload, JS_UNDEFINED, JS_UNDEFINED);
+    JS_FreeValue(context, payload);
+    if (JS_IsException(payload_json_value)) {
+        JS_FreeCString(context, method);
+        return JS_EXCEPTION;
+    }
+    if (JS_IsUndefined(payload_json_value)) {
+        JS_FreeValue(context, payload_json_value);
+        payload_json_value = JS_NewString(context, "null");
+    }
+
+    size_t payload_json_length = 0;
+    const char* payload_json = JS_ToCStringLen(
+        context,
+        &payload_json_length,
+        payload_json_value
+    );
+    if (payload_json == NULL) {
+        JS_FreeValue(context, payload_json_value);
+        JS_FreeCString(context, method);
+        return JS_EXCEPTION;
+    }
+
+    size_t result_length = 0;
+    ts_status status = runtime->host_invoke_callback(
+        runtime->host_invoke_user_data,
+        method,
+        method_length,
+        payload_json,
+        payload_json_length,
+        NULL,
+        0,
+        &result_length
+    );
+    char* result_json = NULL;
+    if (status == TS_STATUS_OK) {
+        result_json = malloc(result_length + 1);
+        if (result_json == NULL) {
+            status = TS_STATUS_OUT_OF_MEMORY;
+        }
+    }
+    if (status == TS_STATUS_OK) {
+        size_t written_length = result_length;
+        status = runtime->host_invoke_callback(
+            runtime->host_invoke_user_data,
+            method,
+            method_length,
+            payload_json,
+            payload_json_length,
+            result_json,
+            result_length,
+            &written_length
+        );
+        if (status == TS_STATUS_OK && written_length <= result_length) {
+            result_length = written_length;
+            result_json[result_length] = '\0';
+        } else if (status == TS_STATUS_OK) {
+            status = TS_STATUS_BUFFER_TOO_SMALL;
+        }
+    }
+
+    JS_FreeCString(context, payload_json);
+    JS_FreeValue(context, payload_json_value);
+    JS_FreeCString(context, method);
+    if (status != TS_STATUS_OK) {
+        free(result_json);
+        return JS_ThrowInternalError(context, "host invoke failed with status %d", status);
+    }
+
+    JSValue result = JS_ParseJSON(context, result_json, result_length, "<host-result>");
+    free(result_json);
+    return result;
+}
+
 static void track_promise_rejection(
     JSContext* context,
     JSValueConst promise,
@@ -282,8 +381,11 @@ static int install_host_api(ts_runtime* runtime) {
     JSValue global = JS_GetGlobalObject(context);
     JSValue host = JS_NewObject(context);
     JSValue log = JS_NewCFunction(context, host_log, "log", 1);
+    JSValue invoke = JS_NewCFunction(context, host_invoke, "invoke", 2);
 
-    if (JS_IsException(global) || JS_IsException(host) || JS_IsException(log)) {
+    if (JS_IsException(global) || JS_IsException(host) ||
+        JS_IsException(log) || JS_IsException(invoke)) {
+        JS_FreeValue(context, invoke);
         JS_FreeValue(context, log);
         JS_FreeValue(context, host);
         JS_FreeValue(context, global);
@@ -291,6 +393,7 @@ static int install_host_api(ts_runtime* runtime) {
     }
 
     JS_SetPropertyStr(context, host, "log", log);
+    JS_SetPropertyStr(context, host, "invoke", invoke);
     JS_SetPropertyStr(context, global, "host", host);
     JS_FreeValue(context, global);
     return 1;
@@ -314,6 +417,8 @@ ts_runtime* ts_runtime_create(const ts_runtime_config* config) {
     runtime->log_user_data = config->log_user_data;
     runtime->module_load_callback = config->module_load_callback;
     runtime->module_load_user_data = config->module_load_user_data;
+    runtime->host_invoke_callback = config->host_invoke_callback;
+    runtime->host_invoke_user_data = config->host_invoke_user_data;
     runtime->execution_timeout_nanoseconds =
         (uint64_t)config->execution_timeout_milliseconds * 1000000ull;
     runtime->js_runtime = JS_NewRuntime();

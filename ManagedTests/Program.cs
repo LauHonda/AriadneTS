@@ -15,10 +15,18 @@ internal static class Program
         {
             ["feature.js"] = "export const message = '你好 from managed host';",
         };
+        var hostInvokeCount = 0;
 
         using (var runtime = new ScriptRuntime(
             logs.Add,
-            name => modules.TryGetValue(name, out var source) ? source : null))
+            name => modules.TryGetValue(name, out var source) ? source : null,
+            hostInvoker: (method, payload) =>
+            {
+                ++hostInvokeCount;
+                Require(method == "math.double", $"Unexpected host method: {method}");
+                Require(payload == "{\"value\":21}", $"Unexpected host payload: {payload}");
+                return "{\"value\":42}";
+            }))
         {
             runtime.EvaluateModule(
                 "import { message } from './feature.js';" +
@@ -37,6 +45,14 @@ internal static class Program
                 "invoke-entry.js");
             var result = runtime.Invoke("sum", "{\"left\":19,\"right\":23}");
             Require(result == "42", $"Expected invoke result 42, got {result}.");
+
+            runtime.EvaluateModule(
+                "globalThis.__ariadnets_invoke = () => " +
+                "host.invoke('math.double', { value: 21 }).value;",
+                "host-invoke-entry.js");
+            result = runtime.Invoke("hostInvoke");
+            Require(result == "42", $"Expected host invoke result 42, got {result}.");
+            Require(hostInvokeCount == 1, $"Expected one host handler call, got {hostInvokeCount}.");
         }
 
         Require(logs.Count == 2, $"Expected two logs, got {logs.Count}.");
@@ -59,6 +75,24 @@ internal static class Program
             Require(
                 exception.Message == "expected managed loader failure",
                 "Managed loader exception message did not match.");
+        }
+
+        try
+        {
+            using var runtime = new ScriptRuntime(
+                _ => { },
+                hostInvoker: (_, _) => throw new InvalidOperationException("expected host invoke failure"));
+            runtime.Evaluate("host.invoke('failure', null);");
+            throw new InvalidOperationException("Expected the host invoke failure to surface.");
+        }
+        catch (ScriptRuntimeException exception)
+        {
+            Require(
+                exception.Status == "HostCallbackError",
+                $"Expected HostCallbackError, got {exception.Status}.");
+            Require(
+                exception.Message == "expected host invoke failure",
+                "Host invoke exception message did not match.");
         }
 
         var typeScriptDist = Path.GetFullPath(
