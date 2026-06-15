@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/NativeMethods.cs"
+             Link="Runtime/NativeMethods.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptRuntime.cs"
+             Link="Runtime/ScriptRuntime.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptRuntimeException.cs"
+             Link="Runtime/ScriptRuntimeException.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/DirectoryModuleSource.cs"
+             Link="Runtime/DirectoryModuleSource.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptPackageManifest.cs"
+             Link="Runtime/ScriptPackageManifest.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptPackageSignatureVerifier.cs"
+             Link="Runtime/ScriptPackageSignatureVerifier.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptPackage.cs"
+             Link="Runtime/ScriptPackage.cs" />
+    <Compile Include="../UnityPackages/com.ariadnets.runtime/Runtime/ScriptPackageReader.cs"
+             Link="Runtime/ScriptPackageReader.cs" />
+  </ItemGroup>
+</Project>

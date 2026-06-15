@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible AriadneTS problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Unity and target platform
+      placeholder: Unity 6000.0.77f1, macOS Editor
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs

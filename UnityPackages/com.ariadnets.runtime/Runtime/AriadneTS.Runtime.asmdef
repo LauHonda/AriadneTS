@@ -1,0 +1,6 @@
+{
+  "name": "AriadneTS.Runtime",
+  "rootNamespace": "AriadneTS.Runtime",
+  "allowUnsafeCode": false
+}
+

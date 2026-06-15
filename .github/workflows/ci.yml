@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build native runtime
+        run: ./Tools/build_native.sh
+
+      - name: Run native tests
+        run: |
+          ./Build/native/ariadnets_smoke_test
+          ./Build/native/ariadnets_shared_smoke_test
+
+      - name: Build TypeScript
+        run: ./Tools/build_typescript.sh
+
+      - name: Build managed tests
+        run: dotnet build ManagedTests
+
+      - name: Run managed tests
+        env:
+          LD_LIBRARY_PATH: ./Build/native
+        run: dotnet run --project ManagedTests --no-build
+
+      - name: Compile Unity runtime against stubs
+        run: dotnet build UnityCompileTests
