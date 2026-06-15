@@ -13,7 +13,7 @@ fi
 
 mkdir -p "$BUILD_DIR"
 
-make -C "$QUICKJS_DIR" CFLAGS=-fPIC libquickjs.a
+CFLAGS=-fPIC make -C "$QUICKJS_DIR" libquickjs.a
 
 clang -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -g \
     -I"$ROOT_DIR/Native/include" \
