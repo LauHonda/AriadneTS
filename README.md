@@ -79,6 +79,11 @@ UnityPackages/com.ariadnets.runtime/package.json
 
 ### 2. Build A Signed Script Package
 
+Inside Unity, open **Tools > AriadneTS > Script Tools** to initialize a
+`TypeScript/` folder and build a signed package.
+
+From the command line:
+
 ```sh
 ./Tools/generate_signing_key.sh ~/.ariadnets/dev-private-key.pem
 ./Tools/package_script_update.sh 0.1.0 1 ~/.ariadnets/dev-private-key.pem

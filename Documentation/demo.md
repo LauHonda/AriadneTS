@@ -33,6 +33,14 @@ TypeScript received C# call: Hello from C#
 
 ## Rebuild The Demo Package
 
+From Unity, use **Tools > AriadneTS > Script Tools** and set the output path to:
+
+```text
+Assets/TypeScript/typescript-package.bytes
+```
+
+Or use the command line:
+
 ```sh
 ./Tools/package_script_update.sh 0.2.0 5 /path/to/private-key.pem
 ```

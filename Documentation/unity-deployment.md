@@ -34,6 +34,22 @@ Build/script-packages/1.0.0/typescript-package.bytes
 Keep the private key outside source control and application builds. Record the
 printed `RSA1.<modulus>.<exponent>` public key for the Unity inspector.
 
+Changing TypeScript code changes the package bytes and signature, but not the
+public key. The public key changes only when the private key changes.
+
+## Unity Editor Tool
+
+The UPM package includes **Tools > AriadneTS > Script Tools**.
+
+1. Click **Initialize TypeScript Project** to create `TypeScript/` at the Unity
+   project root. Existing folders are never overwritten.
+2. Select a private key PEM.
+3. Select an output path, for example
+   `Assets/TypeScript/typescript-package.bytes`.
+4. Click **Compile TypeScript And Build Package**.
+5. Copy the displayed public key into
+   `ScriptPackageRuntimeController.packageSigningPublicKey`.
+
 ## Deploy Runtime Into Unity
 
 ```sh

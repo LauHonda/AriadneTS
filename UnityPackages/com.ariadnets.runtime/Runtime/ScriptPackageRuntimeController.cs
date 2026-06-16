@@ -15,6 +15,13 @@ namespace AriadneTS.Runtime
         private ScriptPackage activePackage;
 
         public ScriptPackage ActivePackage => activePackage;
+        public string PackageSigningPublicKey => packageSigningPublicKey;
+
+        public void ConfigureSigningPublicKey(string publicKey)
+        {
+            packageSigningPublicKey = publicKey ?? string.Empty;
+            packageReader = CreatePackageReader();
+        }
 
         public void RegisterHostHandler(string method, Func<string, string> handler)
         {
@@ -43,13 +50,16 @@ namespace AriadneTS.Runtime
             }
 
             runtimeHost.SetAutoStart(false);
-            packageReader = new ScriptPackageReader(
-                packageSigningPublicKey,
-                UnityManifestSerializer.Deserialize);
+            packageReader = CreatePackageReader();
         }
 
         public ScriptPackage ValidatePackage(byte[] packageBytes)
         {
+            if (packageReader == null)
+            {
+                packageReader = CreatePackageReader();
+            }
+
             return packageReader.Read(packageBytes);
         }
 
@@ -103,6 +113,13 @@ namespace AriadneTS.Runtime
 
             return runtimeHost ??
                 throw new InvalidOperationException("ScriptRuntimeHost is required.");
+        }
+
+        private ScriptPackageReader CreatePackageReader()
+        {
+            return new ScriptPackageReader(
+                packageSigningPublicKey,
+                UnityManifestSerializer.Deserialize);
         }
     }
 }

@@ -1,0 +1,11 @@
+{
+  "name": "AriadneTS.Editor",
+  "rootNamespace": "AriadneTS.Editor",
+  "references": [
+    "AriadneTS.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "allowUnsafeCode": false
+}

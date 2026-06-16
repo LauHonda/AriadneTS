@@ -4,6 +4,23 @@
   "displayName": "AriadneTS",
   "description": "Unity host for the cross-engine AriadneTS QuickJS runtime.",
   "unity": "6000.0",
+  "keywords": [
+    "typescript",
+    "quickjs",
+    "scripting",
+    "hot-update",
+    "windows",
+    "macos",
+    "android",
+    "ios"
+  ],
+  "samples": [
+    {
+      "displayName": "Getting Started",
+      "description": "A small Host Bridge component and setup notes for running the default TypeScript template.",
+      "path": "Samples~/Getting Started"
+    }
+  ],
   "author": {
     "name": "AriadneTS Contributors"
   }
