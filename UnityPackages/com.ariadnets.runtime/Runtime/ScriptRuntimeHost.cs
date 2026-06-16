@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using UnityEngine;
 
 namespace AriadneTS.Runtime
@@ -25,8 +27,19 @@ namespace AriadneTS.Runtime
         [SerializeField]
         private bool autoStart;
 
+        [SerializeField]
+        private ScriptDiagnosticMode diagnosticMode = ScriptDiagnosticMode.Automatic;
+
+        [SerializeField]
+        private bool writeScriptLogFile = false;
+
+        [SerializeField]
+        private string scriptLogFileName = "AriadneTS/script.log";
+
         private ScriptRuntime runtime;
         private Func<string, string> moduleLoader;
+        private ScriptPackageManifest activeManifest;
+        private Exception lastReportedException;
         private readonly Dictionary<string, Func<string, string>> hostHandlers =
             new Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
 
@@ -81,7 +94,16 @@ namespace AriadneTS.Runtime
             }
 
             ConfigureScriptSource(package.LoadModule, package.Manifest.EntryModule);
-            StartRuntime();
+            activeManifest = package.Manifest;
+            try
+            {
+                StartRuntime();
+            }
+            catch
+            {
+                activeManifest = null;
+                throw;
+            }
         }
 
         public void SwitchPackage(ScriptPackage package)
@@ -91,7 +113,17 @@ namespace AriadneTS.Runtime
                 throw new ArgumentNullException(nameof(package));
             }
 
-            SwitchScriptSource(package.LoadModule, package.Manifest.EntryModule);
+            var previousManifest = activeManifest;
+            activeManifest = package.Manifest;
+            try
+            {
+                SwitchScriptSource(package.LoadModule, package.Manifest.EntryModule);
+            }
+            catch
+            {
+                activeManifest = previousManifest;
+                throw;
+            }
         }
 
         public void ConfigureModuleLoader(Func<string, string> loader)
@@ -135,8 +167,9 @@ namespace AriadneTS.Runtime
                 runtime.Invoke("start");
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
             }
-            catch
+            catch (Exception exception)
             {
+                ReportScriptException("start", exception);
                 runtime.Dispose();
                 runtime = null;
                 throw;
@@ -151,12 +184,12 @@ namespace AriadneTS.Runtime
                 return;
             }
 
-            var stateJson = runtime.Invoke("beforeReload") ?? "null";
+            var stateJson = InvokeRuntime("beforeReload", "beforeReload") ?? "null";
             runtime.Dispose();
             runtime = null;
 
             StartRuntime();
-            runtime.Invoke("afterReload", stateJson);
+            InvokeRuntime("afterReload", "afterReload", stateJson);
             runtime.ExecutePendingJobs(maxJobsPerFrame);
         }
 
@@ -178,24 +211,26 @@ namespace AriadneTS.Runtime
                 return;
             }
 
-            var stateJson = runtime.Invoke("beforeReload") ?? "null";
+            var stateJson = InvokeRuntime("beforeReload", "beforeReload") ?? "null";
             var previousLoader = moduleLoader;
             var previousEntryModule = entryModule;
+            var previousManifest = activeManifest;
             StopRuntime();
 
             try
             {
                 ConfigureScriptSource(loader, configuredEntryModule);
                 StartRuntime();
-                runtime.Invoke("afterReload", stateJson);
+                InvokeRuntime("afterReload", "afterReload", stateJson);
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
             }
             catch
             {
                 StopRuntime();
                 ConfigureScriptSource(previousLoader, previousEntryModule);
+                activeManifest = previousManifest;
                 StartRuntime();
-                runtime.Invoke("afterReload", stateJson);
+                InvokeRuntime("afterReload", "afterReload", stateJson);
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
                 throw;
             }
@@ -210,7 +245,7 @@ namespace AriadneTS.Runtime
 
             try
             {
-                runtime.Invoke("shutdown");
+                InvokeRuntime("shutdown", "shutdown");
             }
             finally
             {
@@ -233,7 +268,7 @@ namespace AriadneTS.Runtime
             catch (Exception exception)
             {
                 enabled = false;
-                Debug.LogException(exception);
+                ReportScriptException("autoStart", exception);
             }
         }
 
@@ -246,13 +281,13 @@ namespace AriadneTS.Runtime
 
             try
             {
-                runtime.Invoke("update", DeltaTimeJson(Time.deltaTime));
+                InvokeRuntime("update", "update", DeltaTimeJson(Time.deltaTime));
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
             }
             catch (Exception exception)
             {
                 enabled = false;
-                Debug.LogException(exception);
+                ReportScriptException("update", exception);
             }
         }
 
@@ -265,12 +300,12 @@ namespace AriadneTS.Runtime
 
             try
             {
-                runtime.Invoke("lateUpdate", DeltaTimeJson(Time.deltaTime));
+                InvokeRuntime("lateUpdate", "lateUpdate", DeltaTimeJson(Time.deltaTime));
             }
             catch (Exception exception)
             {
                 enabled = false;
-                Debug.LogException(exception);
+                ReportScriptException("lateUpdate", exception);
             }
         }
 
@@ -287,7 +322,7 @@ namespace AriadneTS.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                ReportScriptException("destroy", exception);
             }
         }
 
@@ -306,6 +341,147 @@ namespace AriadneTS.Runtime
             }
 
             return handler(payloadJson) ?? "null";
+        }
+
+        private string InvokeRuntime(string phase, string method, string payloadJson = "null")
+        {
+            return runtime.Invoke(method, payloadJson);
+        }
+
+        private void ReportScriptException(
+            string phase,
+            Exception exception,
+            string method = null,
+            string payloadJson = null)
+        {
+            if (exception == null)
+            {
+                exception = new InvalidOperationException("Script runtime startup failed.");
+            }
+            if (ReferenceEquals(exception, lastReportedException))
+            {
+                return;
+            }
+            lastReportedException = exception;
+
+            var message = IsDevelopmentDiagnostics()
+                ? FormatDevelopmentError(phase, exception, method, payloadJson)
+                : FormatReleaseError(phase, exception, method);
+
+            Debug.LogError(message);
+            if (IsDevelopmentDiagnostics())
+            {
+                Debug.LogException(exception);
+            }
+            WriteScriptLog(message);
+        }
+
+        private bool IsDevelopmentDiagnostics()
+        {
+            return diagnosticMode == ScriptDiagnosticMode.Development ||
+                (diagnosticMode == ScriptDiagnosticMode.Automatic &&
+                    (Debug.isDebugBuild || Application.isEditor));
+        }
+
+        private string FormatDevelopmentError(
+            string phase,
+            Exception exception,
+            string method,
+            string payloadJson)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("AriadneTS Script Error");
+            builder.Append("Mode: Development").AppendLine();
+            AppendCommonFields(builder, phase, exception, method);
+            if (!string.IsNullOrEmpty(payloadJson))
+            {
+                builder.Append("Payload: ").AppendLine(payloadJson);
+            }
+            builder.Append("Message: ").AppendLine(exception.Message);
+            if (!string.IsNullOrEmpty(exception.StackTrace))
+            {
+                builder.AppendLine("Managed Stack:");
+                builder.AppendLine(exception.StackTrace);
+            }
+            return builder.ToString().TrimEnd();
+        }
+
+        private string FormatReleaseError(string phase, Exception exception, string method)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("AriadneTS Script Error");
+            builder.Append("Mode: Release").AppendLine();
+            AppendCommonFields(builder, phase, exception, method);
+            builder.Append("Message: ").AppendLine(Summarize(exception.Message));
+            return builder.ToString().TrimEnd();
+        }
+
+        private void AppendCommonFields(
+            StringBuilder builder,
+            string phase,
+            Exception exception,
+            string method)
+        {
+            builder.Append("Phase: ").AppendLine(phase ?? "unknown");
+            if (!string.IsNullOrEmpty(method))
+            {
+                builder.Append("Method: ").AppendLine(method);
+            }
+            builder.Append("Status: ").AppendLine(
+                exception is ScriptRuntimeException scriptException
+                    ? scriptException.Status
+                    : exception.GetType().Name);
+            if (activeManifest != null)
+            {
+                builder.Append("Package: ")
+                    .Append(activeManifest.Version)
+                    .Append(" build ")
+                    .Append(activeManifest.BuildNumber.ToString(CultureInfo.InvariantCulture))
+                    .AppendLine();
+                builder.Append("Entry: ").AppendLine(activeManifest.EntryModule);
+            }
+        }
+
+        private static string Summarize(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+            {
+                return "Script execution failed.";
+            }
+
+            var firstLine = message.Split(new[] { '\r', '\n' }, 2)[0];
+            return firstLine.Length <= 240 ? firstLine : firstLine.Substring(0, 240);
+        }
+
+        private void WriteScriptLog(string message)
+        {
+            if (!writeScriptLogFile || string.IsNullOrWhiteSpace(scriptLogFileName))
+            {
+                return;
+            }
+
+            try
+            {
+                var path = Path.Combine(Application.persistentDataPath, scriptLogFileName);
+                var directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.AppendAllText(
+                    path,
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+                    Environment.NewLine +
+                    message +
+                    Environment.NewLine +
+                    Environment.NewLine,
+                    Encoding.UTF8);
+            }
+            catch (Exception logException)
+            {
+                Debug.LogWarning("Failed to write AriadneTS script log: " + logException.Message);
+            }
         }
     }
 }

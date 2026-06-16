@@ -20,8 +20,9 @@ globalThis.__ariadnets_invoke = (method: string, payload: unknown): unknown => {
       return application.afterReload(payload as ReloadState | null);
     case "shutdown":
       return application.shutdown();
+    case "demo.greet":
+      return application.greet(payload as { message: string });
     default:
       throw new Error(`Unknown lifecycle method: ${method}`);
   }
 };
-

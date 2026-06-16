@@ -137,6 +137,9 @@ implementation.
 
 See [Unity deployment](Documentation/unity-deployment.md) and
 [runtime architecture](Documentation/runtime-architecture.md) for details.
+The included bidirectional example is documented in
+[Unity Demo](Documentation/demo.md).
+Script error behavior is documented in [Debugging](Documentation/debugging.md).
 
 ## Repository Layout
 

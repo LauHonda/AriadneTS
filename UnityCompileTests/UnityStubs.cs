@@ -50,7 +50,13 @@ namespace UnityEngine
 
     public static class Debug
     {
+        public static bool isDebugBuild => true;
+
         public static void Log(object message)
+        {
+        }
+
+        public static void LogError(object message)
         {
         }
 
@@ -61,6 +67,12 @@ namespace UnityEngine
         public static void LogException(Exception exception)
         {
         }
+    }
+
+    public static class Application
+    {
+        public static bool isEditor => true;
+        public static string persistentDataPath => ".";
     }
 
     public static class JsonUtility

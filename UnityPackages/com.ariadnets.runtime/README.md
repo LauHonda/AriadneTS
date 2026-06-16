@@ -60,3 +60,15 @@ host.log(player.name);
 
 Handlers execute on the runtime owner thread. Return valid JSON and do not use
 the synchronous bridge for high-frequency per-entity calls.
+
+## Diagnostics
+
+`ScriptRuntimeHost.diagnosticMode` controls script error output:
+
+- `Automatic` uses full diagnostics in Editor/debug builds and compact output
+  in release builds.
+- `Development` includes payload JSON and full stack details.
+- `Release` logs package and method summaries without payloads.
+
+Enable `writeScriptLogFile` to append script diagnostics under
+`Application.persistentDataPath/AriadneTS/script.log`.

@@ -1,3 +1,5 @@
+import { invokeHost } from "./host-api.js";
+
 export interface ReloadState {
   elapsedSeconds: number;
 }
@@ -11,6 +13,11 @@ export class GameApplication {
 
   start(): void {
     host.log("TypeScript application started");
+    const player = invokeHost<{ name: string; engine: string }>(
+      "demo.getPlayer",
+      { requestedBy: "TypeScript" },
+    );
+    host.log(`TypeScript received C# result: ${player.name} on ${player.engine}`);
     Promise.resolve().then(() => host.log("TypeScript promise job ran"));
   }
 
@@ -33,5 +40,9 @@ export class GameApplication {
   shutdown(): void {
     host.log("TypeScript application stopped");
   }
-}
 
+  greet(payload: { message: string }): { reply: string } {
+    host.log(`TypeScript received C# call: ${payload.message}`);
+    return { reply: `Hello from TypeScript, ${payload.message}` };
+  }
+}

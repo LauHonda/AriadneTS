@@ -30,3 +30,5 @@ UnityProject/MemoryCaptures/
 UnityProject/Recordings/
 UnityProject/Assets/TypeScript/*.bytes
 UnityProject/Assets/TypeScript/*.bytes.meta
+!UnityProject/Assets/TypeScript/typescript-package.bytes
+!UnityProject/Assets/TypeScript/typescript-package.bytes.meta

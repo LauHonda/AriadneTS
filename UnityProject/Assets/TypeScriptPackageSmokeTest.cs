@@ -8,7 +8,19 @@ public sealed class TypeScriptPackageSmokeTest : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log("[AriadneTS Demo] Registering C# host method: demo.getPlayer");
+        controller.RegisterHostHandler("demo.getPlayer", payloadJson =>
+        {
+            Debug.Log($"[AriadneTS Demo] TypeScript called C# with: {payloadJson}");
+            return "{\"name\":\"Ariadne\",\"engine\":\"Unity\"}";
+        });
+
+        Debug.Log("[AriadneTS Demo] Starting signed TypeScript package");
         controller.StartPackage(packageAsset);
-        Debug.Log("Signed TypeScript package started");
+
+        var result = controller.InvokeScript(
+            "demo.greet",
+            "{\"message\":\"Hello from C#\"}");
+        Debug.Log($"[AriadneTS Demo] C# received TypeScript result: {result}");
     }
 }

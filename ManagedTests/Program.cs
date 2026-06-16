@@ -98,7 +98,17 @@ internal static class Program
         var typeScriptDist = Path.GetFullPath(
             Path.Combine(AppContext.BaseDirectory, "../../../../TypeScript/dist"));
         var typeScriptModules = new DirectoryModuleSource(typeScriptDist);
-        using (var runtime = new ScriptRuntime(logs.Add, typeScriptModules.Load))
+        using (var runtime = new ScriptRuntime(
+            logs.Add,
+            typeScriptModules.Load,
+            hostInvoker: (method, payload) =>
+            {
+                Require(method == "demo.getPlayer", $"Unexpected demo host method: {method}");
+                Require(
+                    payload == "{\"requestedBy\":\"TypeScript\"}",
+                    $"Unexpected demo host payload: {payload}");
+                return "{\"name\":\"Ariadne\",\"engine\":\"ManagedTests\"}";
+            }))
         {
             var entry = typeScriptModules.Load("bootstrap.js");
             Require(entry != null, "Compiled TypeScript bootstrap module was not found.");
@@ -106,6 +116,11 @@ internal static class Program
             runtime.Invoke("start");
             runtime.Invoke("update", "{\"deltaTime\":1.25}");
             runtime.ExecutePendingJobs();
+
+            var greeting = runtime.Invoke("demo.greet", "{\"message\":\"Hello from C#\"}");
+            Require(
+                greeting == "{\"reply\":\"Hello from TypeScript, Hello from C#\"}",
+                $"Unexpected TypeScript demo result: {greeting}");
 
             var state = runtime.Invoke("beforeReload");
             Require(

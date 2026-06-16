@@ -4,6 +4,7 @@
 
 - Added the synchronous engine-independent JSON host bridge.
 - Added Unity host-handler registration and script invocation APIs.
+- Added Unity script diagnostic modes and optional script log files.
 - Increased the native runtime ABI version to 4.
 
 ## 0.1.0 - Unreleased
