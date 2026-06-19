@@ -4,6 +4,9 @@
   "displayName": "AriadneTS",
   "description": "Unity host for the cross-engine AriadneTS QuickJS runtime.",
   "unity": "6000.0",
+  "dependencies": {
+    "com.unity.addressables": "2.6.0"
+  },
   "keywords": [
     "typescript",
     "quickjs",

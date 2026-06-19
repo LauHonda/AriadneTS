@@ -551,6 +551,10 @@ namespace AriadneTS.Editor
             var controller = GetOrAddComponent<ScriptPackageRuntimeController>(hostObject);
             var bootstrapper = GetOrAddComponent<ScriptPackageBootstrapper>(hostObject);
             var demoBridge = GetOrAddComponent<AriadneTsDemoHostBridge>(hostObject);
+            var actorBridge = GetOrAddComponent<AriadneActorBridge>(hostObject);
+            var addressablesBridge = GetOrAddComponent(
+                hostObject,
+                "AriadneTS.Runtime.AriadneAddressablesBridge, AriadneTS.Addressables");
             var packageAsset = LoadTextAssetFromAbsolutePath(outputPackagePath);
 
             SetObjectReference(controller, "runtimeHost", runtimeHost);
@@ -559,6 +563,11 @@ namespace AriadneTS.Editor
             SetObjectReference(bootstrapper, "packageAsset", packageAsset);
             SetBool(bootstrapper, "startOnStart", packageAsset != null);
             SetObjectReference(demoBridge, "controller", controller);
+            SetObjectReference(actorBridge, "controller", controller);
+            if (addressablesBridge != null)
+            {
+                SetObjectReference(addressablesBridge, "controller", controller);
+            }
 
             EditorUtility.SetDirty(hostObject);
             EditorSceneManager.MarkSceneDirty(hostObject.scene);
@@ -566,6 +575,10 @@ namespace AriadneTS.Editor
             buildLog = packageAsset == null
                 ? "Runtime host was created, but the output package is not under Assets or has not been built yet. Assign the package TextAsset after building."
                 : "Runtime host was created and configured:\n" + AssetDatabase.GetAssetPath(packageAsset);
+            if (addressablesBridge == null)
+            {
+                buildLog += "\nAddressables bridge was not added. Ensure com.unity.addressables is installed and Unity has recompiled the package.";
+            }
         }
 
         private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory)
@@ -620,6 +633,20 @@ namespace AriadneTS.Editor
             return component != null
                 ? component
                 : Undo.AddComponent<T>(hostObject);
+        }
+
+        private static Component GetOrAddComponent(GameObject hostObject, string typeName)
+        {
+            var type = Type.GetType(typeName);
+            if (type == null || !typeof(Component).IsAssignableFrom(type))
+            {
+                return null;
+            }
+
+            var component = hostObject.GetComponent(type);
+            return component != null
+                ? component
+                : Undo.AddComponent(hostObject, type);
         }
 
         private static TextAsset LoadTextAssetFromAbsolutePath(string absolutePath)

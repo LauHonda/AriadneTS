@@ -122,12 +122,11 @@ Addressables version.
 The entry module installs `globalThis.__ariadnets_invoke` and handles:
 
 ```text
-start
-update
-lateUpdate
+onBeginPlay
+onTick
+onEndPlay
 beforeReload
 afterReload
-shutdown
 ```
 
 See [bootstrap.ts](TypeScript/src/bootstrap.ts) for the reference

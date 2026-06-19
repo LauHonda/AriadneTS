@@ -9,6 +9,42 @@ namespace AriadneTS.Runtime
 {
     public sealed class ScriptRuntimeHost : MonoBehaviour
     {
+        private const string BuiltInLogMethod = "ariadnets.log";
+        private static readonly string[] BuiltInResourceMethods =
+        {
+            "ariadnets.async.begin",
+            "assets.verify",
+            "assets.verifySync",
+            "assets.verifyAsync",
+            "assets.download",
+            "assets.downloadAsync",
+            "assets.preloadGroup",
+            "assets.preloadGroupAsync",
+            "assets.load",
+            "assets.loadSync",
+            "assets.loadAsync",
+            "assets.loadGroup",
+            "assets.loadGroupSync",
+            "assets.loadGroupAsync",
+            "assets.release",
+            "assets.releaseGroup",
+            "scenes.preload",
+            "scenes.preloadAsync",
+            "scenes.load",
+            "scenes.loadSync",
+            "scenes.loadAsync",
+            "scenes.unload",
+            "scenes.unloadSync",
+            "scenes.unloadAsync",
+            "actors.create",
+            "actors.destroy",
+            "actors.setTransform",
+            "actors.setParent",
+            "components.add",
+            "components.remove",
+            "components.setProperty",
+        };
+
         [SerializeField]
         private string entryModule = "bootstrap.js";
 
@@ -154,6 +190,7 @@ namespace AriadneTS.Runtime
                 throw new InvalidOperationException($"Script entry module was not found: {entryModule}");
             }
 
+            RegisterBuiltInHostHandlers();
             runtime = new ScriptRuntime(
                 Debug.Log,
                 moduleLoader,
@@ -164,7 +201,7 @@ namespace AriadneTS.Runtime
             try
             {
                 runtime.EvaluateModule(entrySource, entryModule);
-                runtime.Invoke("start");
+                InvokeRuntimeWithFallback("onBeginPlay", "start");
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
             }
             catch (Exception exception)
@@ -245,7 +282,7 @@ namespace AriadneTS.Runtime
 
             try
             {
-                InvokeRuntime("shutdown", "shutdown");
+                InvokeRuntimeWithFallback("onEndPlay", "shutdown");
             }
             finally
             {
@@ -281,32 +318,20 @@ namespace AriadneTS.Runtime
 
             try
             {
-                InvokeRuntime("update", "update", DeltaTimeJson(Time.deltaTime));
+                InvokeRuntimeWithFallback("onTick", "update", DeltaTimeJson(Time.deltaTime));
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
             }
             catch (Exception exception)
             {
                 enabled = false;
-                ReportScriptException("update", exception);
+                ReportScriptException("onTick", exception);
             }
         }
 
         private void LateUpdate()
         {
-            if (runtime == null)
-            {
-                return;
-            }
-
-            try
-            {
-                InvokeRuntime("lateUpdate", "lateUpdate", DeltaTimeJson(Time.deltaTime));
-            }
-            catch (Exception exception)
-            {
-                enabled = false;
-                ReportScriptException("lateUpdate", exception);
-            }
+            // AriadneTS currently exposes onBeginPlay, onTick, and onEndPlay.
+            // Frame-end lifecycle can be added later with a cross-engine contract.
         }
 
         private void OnDestroy()
@@ -343,9 +368,128 @@ namespace AriadneTS.Runtime
             return handler(payloadJson) ?? "null";
         }
 
+        private void RegisterBuiltInHostHandlers()
+        {
+            if (!hostHandlers.ContainsKey(BuiltInLogMethod))
+            {
+                hostHandlers.Add(BuiltInLogMethod, HandleScriptLog);
+            }
+            foreach (var method in BuiltInResourceMethods)
+            {
+                if (!hostHandlers.ContainsKey(method))
+                {
+                    hostHandlers.Add(method, payloadJson => HandleNotImplementedBridge(method, payloadJson));
+                }
+            }
+        }
+
+        private static string HandleScriptLog(string payloadJson)
+        {
+            var payload = JsonUtility.FromJson<ScriptLogPayload>(payloadJson ?? "{}");
+            var message = payload != null && payload.message != null
+                ? payload.message
+                : string.Empty;
+            switch (payload?.level)
+            {
+                case "warning":
+                case "warn":
+                    Debug.LogWarning(message);
+                    break;
+                case "error":
+                    Debug.LogError(message);
+                    break;
+                default:
+                    Debug.Log(message);
+                    break;
+            }
+
+            return "null";
+        }
+
+        private static string HandleNotImplementedBridge(string method, string payloadJson)
+        {
+            return "{\"ok\":false,\"error\":{\"code\":\"NotImplemented\",\"message\":\"Bridge method is not implemented: " +
+                EscapeJson(method) +
+                "\",\"details\":{\"payload\":" +
+                NormalizeJsonPayload(payloadJson) +
+                "}}}";
+        }
+
+        private static string NormalizeJsonPayload(string payloadJson)
+        {
+            return string.IsNullOrWhiteSpace(payloadJson)
+                ? "null"
+                : payloadJson;
+        }
+
+        private static string EscapeJson(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(value.Length);
+            foreach (var character in value)
+            {
+                switch (character)
+                {
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    default:
+                        builder.Append(character);
+                        break;
+                }
+            }
+            return builder.ToString();
+        }
+
         private string InvokeRuntime(string phase, string method, string payloadJson = "null")
         {
             return runtime.Invoke(method, payloadJson);
+        }
+
+        private string InvokeRuntimeWithFallback(
+            string method,
+            string legacyMethod,
+            string payloadJson = "null")
+        {
+            try
+            {
+                return runtime.Invoke(method, payloadJson);
+            }
+            catch (ScriptRuntimeException exception)
+            {
+                if (!IsUnknownLifecycleMethod(exception, method))
+                {
+                    throw;
+                }
+
+                return runtime.Invoke(legacyMethod, payloadJson);
+            }
+        }
+
+        private static bool IsUnknownLifecycleMethod(ScriptRuntimeException exception, string method)
+        {
+            return exception != null &&
+                string.Equals(exception.Status, "ScriptError", StringComparison.Ordinal) &&
+                exception.Message != null &&
+                exception.Message.Contains(
+                    $"Unknown lifecycle method: {method}",
+                    StringComparison.Ordinal);
         }
 
         private void ReportScriptException(
@@ -374,6 +518,13 @@ namespace AriadneTS.Runtime
                 Debug.LogException(exception);
             }
             WriteScriptLog(message);
+        }
+
+        [Serializable]
+        private sealed class ScriptLogPayload
+        {
+            public string level = string.Empty;
+            public string message = string.Empty;
         }
 
         private bool IsDevelopmentDiagnostics()

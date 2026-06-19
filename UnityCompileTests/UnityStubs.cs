@@ -5,15 +5,87 @@ namespace UnityEngine
 {
     public class Object
     {
+        public string name { get; set; }
+
+        public static void Destroy(Object obj)
+        {
+        }
     }
 
-    public class MonoBehaviour : Object
+    public class Component : Object
+    {
+        public GameObject gameObject { get; internal set; }
+        public Transform transform => gameObject?.transform;
+    }
+
+    public class MonoBehaviour : Component
     {
         public bool enabled { get; set; }
 
         public T GetComponent<T>() where T : class
         {
             return null;
+        }
+    }
+
+    public sealed class GameObject : Object
+    {
+        public GameObject(string name = "")
+        {
+            this.name = name;
+            transform = new Transform();
+            transform.gameObject = this;
+        }
+
+        public Transform transform { get; }
+
+        public T AddComponent<T>() where T : Component, new()
+        {
+            var component = new T();
+            component.gameObject = this;
+            return component;
+        }
+    }
+
+    public sealed class Transform : Component
+    {
+        public Vector3 position { get; set; }
+        public Quaternion rotation { get; set; }
+        public Vector3 localPosition { get; set; }
+        public Quaternion localRotation { get; set; }
+
+        public void SetParent(Transform parent, bool worldPositionStays)
+        {
+        }
+    }
+
+    public struct Vector3
+    {
+        public float x;
+        public float y;
+        public float z;
+
+        public Vector3(float x, float y, float z)
+        {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    public struct Quaternion
+    {
+        public float x;
+        public float y;
+        public float z;
+        public float w;
+
+        public Quaternion(float x, float y, float z, float w)
+        {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.w = w;
         }
     }
 

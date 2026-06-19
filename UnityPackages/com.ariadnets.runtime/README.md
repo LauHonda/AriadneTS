@@ -42,7 +42,7 @@ Addressables decides which package to load next after a failure.
 
 ## Scene Components
 
-- `ScriptRuntimeHost` drives `start`, `update`, `lateUpdate`, `shutdown`,
+- `ScriptRuntimeHost` drives `onBeginPlay`, `onTick`, `onEndPlay`,
   Promise jobs, and full-runtime state handoff.
 - `ScriptPackageRuntimeController` accepts package bytes and starts or switches
   the host.
@@ -115,7 +115,7 @@ set `MINGW_CC` before running `./Tools/build_windows.sh`.
 
 Import **Getting Started** from Unity Package Manager to get
 `AriadneTsSampleHostBridge`. Add it to the same GameObject as the runtime host.
-The default TypeScript template calls `demo.getPlayer` during startup, and the
+The default TypeScript template calls `demo.getPlayer` during `onBeginPlay`, and the
 sample bridge returns JSON from C#.
 
 ## Bootstrap Component
@@ -129,6 +129,40 @@ and stops it on destroy. For Addressables or custom update flows, load the
 `AriadneTsDemoHostBridge` is only a starter bridge for the generated template.
 Remove or replace it after your own C# host API registers the methods used by
 your TypeScript business code.
+
+## Addressables Bridge
+
+The package depends on `com.unity.addressables` and includes
+`AriadneAddressablesBridge`. The editor setup tool adds it to the runtime
+GameObject when the Addressables assembly is available.
+
+The TypeScript SDK exposes synchronous loading and asynchronous callback
+operations:
+
+```ts
+const cached = Ariadne.assets.loadSync("ui/icon", { kind: "Sprite" });
+
+Ariadne.assets.loadAsync("ui/icon", {
+  onProgress(progress) {},
+  onComplete(asset) {},
+  onError(error) {},
+}, { kind: "Sprite" });
+```
+
+Synchronous calls start an Addressables operation when needed and wait for it to
+complete. Asynchronous calls start Addressables operations and report progress
+back to TypeScript callbacks.
+
+Current Unity mappings:
+
+- `assets.downloadAsync` -> `Addressables.DownloadDependenciesAsync`
+- `assets.preloadGroupAsync` / `assets.loadGroupAsync` ->
+  `Addressables.LoadAssetsAsync`
+- `assets.loadAsync` -> `Addressables.LoadAssetAsync`
+- `assets.release` / `assets.releaseGroup` -> `Addressables.Release`
+- `scenes.preloadAsync` -> `Addressables.DownloadDependenciesAsync`
+- `scenes.loadAsync` -> `Addressables.LoadSceneAsync`
+- `scenes.unloadAsync` -> `Addressables.UnloadSceneAsync`
 
 ## Low-Level API
 

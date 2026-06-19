@@ -1,0 +1,10 @@
+{
+  "name": "AriadneTS.Addressables",
+  "rootNamespace": "AriadneTS.Runtime",
+  "references": [
+    "AriadneTS.Runtime",
+    "Unity.Addressables",
+    "Unity.ResourceManager"
+  ],
+  "allowUnsafeCode": false
+}

@@ -3,7 +3,7 @@
     "target": "ES2023",
     "module": "ES2022",
     "moduleResolution": "Bundler",
-    "rootDir": "src",
+    "rootDir": ".",
     "outDir": "dist",
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -13,6 +13,7 @@
     "skipLibCheck": true
   },
   "include": [
+    "ariadnets-sdk/**/*.ts",
     "src/**/*.ts"
   ]
 }

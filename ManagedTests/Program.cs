@@ -103,6 +103,23 @@ internal static class Program
             typeScriptModules.Load,
             hostInvoker: (method, payload) =>
             {
+                if (method == "ariadnets.log")
+                {
+                    return "null";
+                }
+                if (method == "ariadnets.async.begin")
+                {
+                    return "{\"ok\":true,\"result\":{\"requestId\":1}}";
+                }
+                if (method == "actors.create")
+                {
+                    return "{\"ok\":true,\"result\":{\"id\":1,\"name\":\"DemoPlayer\"}}";
+                }
+                if (method == "actors.setTransform" || method == "actors.setParent" || method == "actors.destroy")
+                {
+                    return "{\"ok\":true,\"result\":null}";
+                }
+
                 Require(method == "demo.getPlayer", $"Unexpected demo host method: {method}");
                 Require(
                     payload == "{\"requestedBy\":\"TypeScript\"}",
@@ -110,11 +127,11 @@ internal static class Program
                 return "{\"name\":\"Ariadne\",\"engine\":\"ManagedTests\"}";
             }))
         {
-            var entry = typeScriptModules.Load("bootstrap.js");
+            var entry = typeScriptModules.Load("src/bootstrap.js");
             Require(entry != null, "Compiled TypeScript bootstrap module was not found.");
-            runtime.EvaluateModule(entry, "bootstrap.js");
-            runtime.Invoke("start");
-            runtime.Invoke("update", "{\"deltaTime\":1.25}");
+            runtime.EvaluateModule(entry, "src/bootstrap.js");
+            runtime.Invoke("onBeginPlay");
+            runtime.Invoke("onTick", "{\"deltaTime\":1.25}");
             runtime.ExecutePendingJobs();
 
             var greeting = runtime.Invoke("demo.greet", "{\"message\":\"Hello from C#\"}");
@@ -126,7 +143,7 @@ internal static class Program
             Require(
                 state == "{\"elapsedSeconds\":1.25}",
                 $"Unexpected TypeScript reload state: {state}");
-            runtime.Invoke("shutdown");
+            runtime.Invoke("onEndPlay");
         }
 
         TestScriptPackageReader();

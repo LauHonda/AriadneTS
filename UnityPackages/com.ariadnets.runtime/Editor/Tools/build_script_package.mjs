@@ -25,11 +25,12 @@ const buildNumber = parseBuildNumber(args["build-number"]);
 const privateKeyPath = requirePath(args["private-key"], "--private-key");
 const outputPackagePath = requireText(args.output, "--output");
 const requiredRuntimeAbiVersion = Number.parseInt(args["required-abi"] ?? "4", 10);
-const entryModule = args.entry ?? "bootstrap.js";
 const distDirectory = path.join(tsRoot, "dist");
 
+await rm(distDirectory, { recursive: true, force: true });
 const tsc = resolveTypeScriptCompiler(tsRoot);
 run(tsc.command, [...tsc.args, "-p", "tsconfig.json"], tsRoot);
+const entryModule = args.entry ?? resolveDefaultEntryModule(distDirectory);
 
 const manifestBytes = await createManifest(
   distDirectory,
@@ -76,6 +77,21 @@ function resolveTypeScriptCompiler(root) {
     : "";
   throw new Error(
     `TypeScript compiler 5.0 or newer was not found. Run npm install in ${root}, or install TypeScript globally.${versionNote} Unity may not inherit the shell PATH, so a terminal-only tsc command is not always visible to the Editor.`,
+  );
+}
+
+function resolveDefaultEntryModule(distDirectory) {
+  const candidates = [
+    "bootstrap.js",
+    "src/bootstrap.js",
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(path.join(distDirectory, candidate))) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    "Entry module was not generated. Expected dist/bootstrap.js or dist/src/bootstrap.js.",
   );
 }
 
