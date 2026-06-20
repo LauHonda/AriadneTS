@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using AriadneTS.Runtime;
@@ -17,6 +18,13 @@ namespace AriadneTS.Editor
         private const string PrivateKeyKey = "AriadneTS.ScriptTools.PrivateKey";
         private const string OutputPathKey = "AriadneTS.ScriptTools.OutputPath";
         private const string NodePathKey = "AriadneTS.ScriptTools.NodePath";
+        private const string DebugEnabledKey = "AriadneTS.ScriptTools.Debug.Enabled";
+        private const string DebugProtocolKey = "AriadneTS.ScriptTools.Debug.Protocol";
+        private const string DebugHostKey = "AriadneTS.ScriptTools.Debug.Host";
+        private const string DebugBasePortKey = "AriadneTS.ScriptTools.Debug.BasePort";
+        private const string DebugInstanceIdKey = "AriadneTS.ScriptTools.Debug.InstanceId";
+        private const string DebugRoleKey = "AriadneTS.ScriptTools.Debug.Role";
+        private const string DebugWaitKey = "AriadneTS.ScriptTools.Debug.Wait";
         private const float BrowseButtonWidth = 80f;
         private const string RuntimeHostObjectName = "AriadneTS Runtime";
 
@@ -28,6 +36,13 @@ namespace AriadneTS.Editor
         private string publicKey;
         private string buildLog;
         private Vector2 scroll;
+        private bool debugEnabled;
+        private ScriptDebugProtocol debugProtocol;
+        private string debugHost;
+        private int debugBasePort;
+        private int debugInstanceId;
+        private string debugRole;
+        private bool debugWaitForAttach;
 
         private static string ProjectRoot =>
             Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -36,7 +51,13 @@ namespace AriadneTS.Editor
             Path.Combine(ProjectRoot, "TypeScript");
 
         private static string DefaultOutputPackagePath =>
+            Path.Combine(ProjectRoot, "Assets", "typescript-package.bytes");
+
+        private static string LegacyDefaultOutputPackagePath =>
             Path.Combine(ProjectRoot, "Assets", "TypeScript", "typescript-package.bytes");
+
+        private static string VsCodeLaunchJsonPath =>
+            Path.Combine(ProjectRoot, ".vscode", "launch.json");
 
         [MenuItem("Tools/AriadneTS/Script Tools")]
         public static void Open()
@@ -50,7 +71,19 @@ namespace AriadneTS.Editor
             buildNumber = EditorPrefs.GetInt(BuildNumberKey, 1);
             privateKeyPath = EditorPrefs.GetString(PrivateKeyKey, string.Empty);
             outputPackagePath = EditorPrefs.GetString(OutputPathKey, DefaultOutputPackagePath);
+            if (Path.GetFullPath(outputPackagePath) == Path.GetFullPath(LegacyDefaultOutputPackagePath))
+            {
+                outputPackagePath = DefaultOutputPackagePath;
+                EditorPrefs.SetString(OutputPathKey, outputPackagePath);
+            }
             nodeExecutable = EditorPrefs.GetString(NodePathKey, FindDefaultNodeExecutable());
+            debugEnabled = EditorPrefs.GetBool(DebugEnabledKey, false);
+            debugProtocol = (ScriptDebugProtocol)EditorPrefs.GetInt(DebugProtocolKey, (int)ScriptDebugProtocol.ChromeDevTools);
+            debugHost = EditorPrefs.GetString(DebugHostKey, "127.0.0.1");
+            debugBasePort = EditorPrefs.GetInt(DebugBasePortKey, 9229);
+            debugInstanceId = EditorPrefs.GetInt(DebugInstanceIdKey, 0);
+            debugRole = EditorPrefs.GetString(DebugRoleKey, "Client");
+            debugWaitForAttach = EditorPrefs.GetBool(DebugWaitKey, false);
             RefreshPublicKey();
         }
 
@@ -71,6 +104,8 @@ namespace AriadneTS.Editor
                 DrawEnvironmentSection(contentWidth);
                 EditorGUILayout.Space(12);
                 DrawBuildSection(contentWidth);
+                EditorGUILayout.Space(12);
+                DrawDebugSection(contentWidth);
                 EditorGUILayout.Space(12);
                 DrawSceneSection(contentWidth);
                 EditorGUILayout.Space(12);
@@ -152,6 +187,12 @@ namespace AriadneTS.Editor
                     "Initialization creates or repairs editable default scripts under <UnityProject>/TypeScript/src without overwriting existing files.",
                     MessageType.Info);
             }
+
+            EditorGUILayout.Space(6);
+            DrawStatus("VSCode Debug Config", IsVsCodeDebugConfigInitialized(), VsCodeLaunchJsonPath);
+            EditorGUILayout.HelpBox(
+                "Use the Environment section's Install VSCode AriadneTS Debugger button to install the VSCode extension and create this launch config.",
+                MessageType.None);
         }
 
         private void DrawBuildSection(float contentWidth)
@@ -232,8 +273,16 @@ namespace AriadneTS.Editor
             DrawStatus("Output Package", File.Exists(outputPackagePath), string.IsNullOrWhiteSpace(outputPackagePath)
                 ? "Not built"
                 : outputPackagePath);
+            DrawStatus("VSCode Debug Config", IsVsCodeDebugConfigInitialized(), VsCodeLaunchJsonPath);
+            using (new EditorGUI.DisabledScope(!File.Exists(nodeExecutable)))
+            {
+                if (GUILayout.Button("Install VSCode AriadneTS Debugger And Config"))
+                {
+                    InstallVsCodeDebuggerExtension();
+                }
+            }
             EditorGUILayout.HelpBox(
-                "AriadneTS needs Node.js, a generated TypeScript project, a signing private key, and a built .bytes package. The build tool can use TypeScript from local node_modules or a compatible global install.",
+                "AriadneTS needs Node.js, a generated TypeScript project, a signing private key, and a built .bytes package. The VSCode button installs the debugger extension and creates .vscode/launch.json for this Unity project root.",
                 MessageType.None);
         }
 
@@ -258,6 +307,83 @@ namespace AriadneTS.Editor
                     "Select a private key first so the tool can fill the controller public key.",
                     MessageType.Warning);
             }
+        }
+
+        private void DrawDebugSection(float contentWidth)
+        {
+            EditorGUILayout.LabelField("Script Debugging", EditorStyles.boldLabel);
+            var changed = false;
+            var nextEnabled = EditorGUILayout.Toggle("Enable Debugging", debugEnabled);
+            if (nextEnabled != debugEnabled)
+            {
+                debugEnabled = nextEnabled;
+                EditorPrefs.SetBool(DebugEnabledKey, debugEnabled);
+                changed = true;
+            }
+
+            var nextProtocol = (ScriptDebugProtocol)EditorGUILayout.EnumPopup("Protocol", debugProtocol);
+            if (nextProtocol != debugProtocol)
+            {
+                debugProtocol = nextProtocol;
+                EditorPrefs.SetInt(DebugProtocolKey, (int)debugProtocol);
+                changed = true;
+            }
+
+            var nextHost = EditorGUILayout.TextField("Host", debugHost);
+            if (nextHost != debugHost)
+            {
+                debugHost = nextHost;
+                EditorPrefs.SetString(DebugHostKey, debugHost);
+                changed = true;
+            }
+
+            var nextBasePort = EditorGUILayout.IntField("Base Port", debugBasePort);
+            var clampedBasePort = Mathf.Clamp(nextBasePort, 1, 65535);
+            if (clampedBasePort != debugBasePort)
+            {
+                debugBasePort = clampedBasePort;
+                EditorPrefs.SetInt(DebugBasePortKey, debugBasePort);
+                changed = true;
+            }
+
+            var nextInstanceId = EditorGUILayout.IntField("Instance Id", debugInstanceId);
+            var clampedInstanceId = Mathf.Max(0, nextInstanceId);
+            if (clampedInstanceId != debugInstanceId)
+            {
+                debugInstanceId = clampedInstanceId;
+                EditorPrefs.SetInt(DebugInstanceIdKey, debugInstanceId);
+                changed = true;
+            }
+
+            var nextRole = EditorGUILayout.TextField("Role", debugRole);
+            if (nextRole != debugRole)
+            {
+                debugRole = nextRole;
+                EditorPrefs.SetString(DebugRoleKey, debugRole);
+                changed = true;
+            }
+
+            var nextWait = EditorGUILayout.Toggle("Wait For Debugger", debugWaitForAttach);
+            if (nextWait != debugWaitForAttach)
+            {
+                debugWaitForAttach = nextWait;
+                EditorPrefs.SetBool(DebugWaitKey, debugWaitForAttach);
+                changed = true;
+            }
+
+            var actualPort = Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535);
+            EditorGUILayout.LabelField("Actual Port", actualPort.ToString(CultureInfo.InvariantCulture));
+            if (changed)
+            {
+                SyncDebugConfiguration();
+            }
+            if (GUILayout.Button("Apply Debug Settings To Scene And VSCode"))
+            {
+                SyncDebugConfiguration();
+            }
+            EditorGUILayout.HelpBox(
+                "This config is the source of truth for the open scene RuntimeHost and .vscode/launch.json. Use a unique Instance Id per Unity/Unreal client or server process.",
+                MessageType.Info);
         }
 
         private void DrawPublicKeySection(float contentWidth)
@@ -383,7 +509,10 @@ namespace AriadneTS.Editor
 
         private void SelectNodeExecutable()
         {
-            var path = EditorUtility.OpenFilePanel("Select Node executable", "/usr/local/bin", string.Empty);
+            var defaultDirectory = Application.platform == RuntimePlatform.WindowsEditor
+                ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)
+                : "/usr/local/bin";
+            var path = EditorUtility.OpenFilePanel("Select Node executable", defaultDirectory, string.Empty);
             if (string.IsNullOrEmpty(path))
             {
                 return;
@@ -452,9 +581,153 @@ namespace AriadneTS.Editor
             var templateRoot = Path.Combine(GetPackageRoot(), "Editor", "Templates", "TypeScript");
             CopyDirectory(templateRoot, TypeScriptRoot);
             Directory.CreateDirectory(Path.Combine(ProjectRoot, "Assets", "TypeScript"));
+            InitializeVsCodeDebugConfig();
             AssetDatabase.Refresh();
-            buildLog = "Initialized TypeScript project at:\n" + TypeScriptRoot;
+            buildLog = "Initialized TypeScript project at:\n" + TypeScriptRoot +
+                "\n\nVSCode debug config:\n" + VsCodeLaunchJsonPath;
             Repaint();
+        }
+
+        private void InitializeVsCodeDebugConfig()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(VsCodeLaunchJsonPath) ?? ProjectRoot);
+            if (File.Exists(VsCodeLaunchJsonPath))
+            {
+                var existing = File.ReadAllText(VsCodeLaunchJsonPath);
+                if (existing.Contains("\"type\": \"ariadnets\""))
+                {
+                    return;
+                }
+                throw new InvalidOperationException(
+                    "A VSCode launch.json already exists. Add the AriadneTS configuration manually or move the existing file before generating.");
+            }
+
+            File.WriteAllText(VsCodeLaunchJsonPath, CreateVsCodeLaunchJson(), Encoding.UTF8);
+            buildLog = "Created VSCode debug config at:\n" + VsCodeLaunchJsonPath;
+            Repaint();
+        }
+
+        private static bool IsVsCodeDebugConfigInitialized()
+        {
+            if (!File.Exists(VsCodeLaunchJsonPath))
+            {
+                return false;
+            }
+
+            var contents = File.ReadAllText(VsCodeLaunchJsonPath);
+            return contents.Contains("\"type\": \"ariadnets\"");
+        }
+
+        private static string CreateVsCodeLaunchJson()
+        {
+            return CreateVsCodeLaunchJson("127.0.0.1", 9229);
+        }
+
+        private static string CreateVsCodeLaunchJson(string host, int port)
+        {
+            return "{\n" +
+                "  \"version\": \"0.2.0\",\n" +
+                "  \"configurations\": [\n" +
+                "    {\n" +
+                "      \"type\": \"ariadnets\",\n" +
+                "      \"request\": \"attach\",\n" +
+                "      \"name\": \"Attach AriadneTS\",\n" +
+                "      \"host\": \"" + JsonEscape(string.IsNullOrWhiteSpace(host) ? "127.0.0.1" : host) + "\",\n" +
+                "      \"port\": " + Mathf.Clamp(port, 1, 65535).ToString(CultureInfo.InvariantCulture) + ",\n" +
+                "      \"tsRoot\": \"${workspaceFolder}/TypeScript\",\n" +
+                "      \"pollIntervalMs\": 250\n" +
+                "    }\n" +
+                "  ]\n" +
+                "}\n";
+        }
+
+        private void InstallVsCodeDebuggerExtension()
+        {
+            var script = Path.Combine(GetPackageRoot(), "Editor", "Tools", "install_vscode_debugger_extension.mjs");
+            var arguments = Quote(script);
+            try
+            {
+                var result = RunProcess(nodeExecutable, arguments, ProjectRoot);
+                buildLog = result.CombinedOutput;
+                if (result.ExitCode != 0)
+                {
+                    EditorUtility.DisplayDialog("AriadneTS VSCode Install Failed", buildLog, "OK");
+                    return;
+                }
+
+                InitializeVsCodeDebugConfig();
+                buildLog += "\nVSCode launch config:\n" + VsCodeLaunchJsonPath;
+                EditorUtility.DisplayDialog(
+                    "AriadneTS VSCode Debugger Installed",
+                    "The VSCode extension was installed and launch.json was created or verified. Restart VSCode or run Developer: Reload Window, then open the Unity project root.",
+                    "OK");
+            }
+            catch (Exception exception)
+            {
+                buildLog = exception.ToString();
+                EditorUtility.DisplayDialog("AriadneTS VSCode Install Failed", exception.Message, "OK");
+            }
+        }
+
+        private void SyncDebugConfiguration()
+        {
+            ApplyDebugSettingsToSceneRuntimeHosts();
+            WriteOrUpdateVsCodeDebugConfig();
+        }
+
+        private void ApplyDebugSettingsToSceneRuntimeHosts()
+        {
+            var updated = 0;
+            foreach (var runtimeHost in Resources.FindObjectsOfTypeAll<ScriptRuntimeHost>())
+            {
+                if (runtimeHost == null ||
+                    runtimeHost.gameObject == null ||
+                    !runtimeHost.gameObject.scene.IsValid() ||
+                    !runtimeHost.gameObject.scene.isLoaded)
+                {
+                    continue;
+                }
+
+                Undo.RecordObject(runtimeHost, "Apply AriadneTS Debug Settings");
+                ApplyDebugSettings(runtimeHost);
+                EditorUtility.SetDirty(runtimeHost);
+                EditorSceneManager.MarkSceneDirty(runtimeHost.gameObject.scene);
+                ++updated;
+            }
+
+            buildLog = "Applied AriadneTS debug settings to " +
+                updated.ToString(CultureInfo.InvariantCulture) +
+                " runtime host(s). Port: " +
+                Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private void WriteOrUpdateVsCodeDebugConfig()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(VsCodeLaunchJsonPath) ?? ProjectRoot);
+            if (File.Exists(VsCodeLaunchJsonPath))
+            {
+                var existing = File.ReadAllText(VsCodeLaunchJsonPath);
+                if (!existing.Contains("\"type\": \"ariadnets\""))
+                {
+                    return;
+                }
+            }
+
+            File.WriteAllText(
+                VsCodeLaunchJsonPath,
+                CreateVsCodeLaunchJson(debugHost, Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535)),
+                Encoding.UTF8);
+        }
+
+        private void ApplyDebugSettings(ScriptRuntimeHost runtimeHost)
+        {
+            SetBool(runtimeHost, "enableScriptDebugging", debugEnabled);
+            SetEnum(runtimeHost, "debugProtocol", (int)debugProtocol);
+            SetString(runtimeHost, "debugHost", debugHost);
+            SetInt(runtimeHost, "debugBasePort", debugBasePort);
+            SetInt(runtimeHost, "debugInstanceId", debugInstanceId);
+            SetString(runtimeHost, "debugRole", debugRole);
+            SetBool(runtimeHost, "waitForDebugger", debugWaitForAttach);
         }
 
         private bool CanBuild()
@@ -558,6 +831,7 @@ namespace AriadneTS.Editor
             var packageAsset = LoadTextAssetFromAbsolutePath(outputPackagePath);
 
             SetObjectReference(controller, "runtimeHost", runtimeHost);
+            ApplyDebugSettings(runtimeHost);
             SetString(controller, "packageSigningPublicKey", publicKey);
             SetObjectReference(bootstrapper, "controller", controller);
             SetObjectReference(bootstrapper, "packageAsset", packageAsset);
@@ -710,6 +984,28 @@ namespace AriadneTS.Editor
             }
         }
 
+        private static void SetInt(UnityEngine.Object target, string propertyName, int value)
+        {
+            var serializedObject = new SerializedObject(target);
+            var property = serializedObject.FindProperty(propertyName);
+            if (property != null)
+            {
+                property.intValue = value;
+                serializedObject.ApplyModifiedProperties();
+            }
+        }
+
+        private static void SetEnum(UnityEngine.Object target, string propertyName, int value)
+        {
+            var serializedObject = new SerializedObject(target);
+            var property = serializedObject.FindProperty(propertyName);
+            if (property != null)
+            {
+                property.enumValueIndex = value;
+                serializedObject.ApplyModifiedProperties();
+            }
+        }
+
         private static void CopyDirectory(string source, string destination)
         {
             Directory.CreateDirectory(destination);
@@ -736,6 +1032,13 @@ namespace AriadneTS.Editor
             return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
+        private static string JsonEscape(string value)
+        {
+            return (value ?? string.Empty)
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"");
+        }
+
         private static string FindDefaultNodeExecutable()
         {
             var candidates = new[]
@@ -751,6 +1054,26 @@ namespace AriadneTS.Editor
                 if (File.Exists(candidate))
                 {
                     return candidate;
+                }
+            }
+
+            var pathVariable = Environment.GetEnvironmentVariable("PATH");
+            if (!string.IsNullOrWhiteSpace(pathVariable))
+            {
+                var executableName = Application.platform == RuntimePlatform.WindowsEditor
+                    ? "node.exe"
+                    : "node";
+                foreach (var directory in pathVariable.Split(Path.PathSeparator))
+                {
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        continue;
+                    }
+                    var candidate = Path.Combine(directory.Trim(), executableName);
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
                 }
             }
 

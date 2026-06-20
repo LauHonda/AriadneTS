@@ -28,6 +28,7 @@ UnityProject/[Ll]ogs/
 UnityProject/[Uu]ser[Ss]ettings/
 UnityProject/MemoryCaptures/
 UnityProject/Recordings/
+UnityProject/TypeScript/dist/
 UnityProject/Assets/TypeScript/*.bytes
 UnityProject/Assets/TypeScript/*.bytes.meta
 !UnityProject/Assets/TypeScript/typescript-package.bytes

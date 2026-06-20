@@ -1,0 +1,4 @@
+Resources/TypeScriptTemplate/dist/
+Resources/TypeScriptTemplate/node_modules/
+*.pem
+*.key

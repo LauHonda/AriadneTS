@@ -131,7 +131,6 @@ GameObject:
   - component: {fileID: 330585545}
   - component: {fileID: 330585544}
   - component: {fileID: 330585547}
-  - component: {fileID: 330585548}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -223,8 +222,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   m_RenderShadows: 1
   m_RequiresDepthTextureOption: 2
   m_RequiresOpaqueTextureOption: 2
@@ -257,18 +256,6 @@ MonoBehaviour:
     m_MipBias: 0
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
---- !u!114 &330585548
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 330585543}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 82ad3e47ea5404e2fb58965b319f4321, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!1 &410087039
 GameObject:
   m_ObjectHideFlags: 0
@@ -377,8 +364,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 474bcb49853aa07438625e644c072ee6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   m_Version: 3
   m_UsePipelineSettings: 1
   m_AdditionalLightsShadowResolutionTier: 2
@@ -390,88 +377,6 @@ MonoBehaviour:
   m_LightCookieSize: {x: 1, y: 1}
   m_LightCookieOffset: {x: 0, y: 0}
   m_SoftShadowQuality: 1
---- !u!1 &526184519
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 526184523}
-  - component: {fileID: 526184522}
-  - component: {fileID: 526184521}
-  - component: {fileID: 526184520}
-  m_Layer: 0
-  m_Name: TypeScriptRuntime
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &526184520
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 526184519}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d8375c53a01664251b08347a2e56285a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  controller: {fileID: 526184521}
-  packageAsset: {fileID: 4900000, guid: 377417fa54bf040d4999d938992b3c06, type: 3}
---- !u!114 &526184521
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 526184519}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 17a5848b538d143ab832b6a5ca69befa, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  runtimeHost: {fileID: 526184522}
-  packageSigningPublicKey: 'RSA1.vxJ3eOab1rDOG5DgS1pGtGlKt-XPrBMiA8PvkMn475PHmtxJ4J09Es4rsATp8-uJq-4XLwitWAaCcz0Yei9en1dKyy0jEfiRAKKrUIVOcTARciAVvL8Mnqpa0tYlY5t7XYZSBvxFjsnH6nqhpav-LmjnpTPQhM2vmOr_22Cu0c1khSYWpuFqZMMCpbc7tXqf0ZZcnMwR3O8iE47EiFuQpoxzAdGdngVxiwSa9CKZCJhq8Qax5bijO2xmdykZn3iAYTePx5xLEDfeWts_NVblzQI-bzkx1LcBYMDA1Qv3BvNXx1fJSPT6oqq6OGRZU8XFnOUGofMP5nO-LmyD4B3Mo91xBgQ9dimllV5katUpuGNZWUu_JBPnnLD_APZBbJlfjpng2U9I45Ri3FaxEZ_nnYvBhKcOEDelhturRvAPJq_Dn6VNZIhgmk0_sPH3nvWqb2O5CNsr2Mnh8fadNTrBgwdj99_VDCa2fsu61xoyH0vN9zqnS7RTzOtAU1q2EHZB.AQAB
-
-'
---- !u!114 &526184522
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 526184519}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: cadc8ca750ad4441bb92615cde5a4bf1, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  entryModule: bootstrap.js
-  memoryLimitBytes: 67108864
-  maxStackSizeBytes: 1048576
-  executionTimeoutMilliseconds: 1000
-  maxJobsPerFrame: 1024
-  autoStart: 0
---- !u!4 &526184523
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 526184519}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -499,8 +404,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 172515602e62fb746b5d573b38a5fe58, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   m_IsGlobal: 1
   priority: 0
   blendDistance: 0
@@ -521,6 +426,141 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1240758143
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1240758148}
+  - component: {fileID: 1240758147}
+  - component: {fileID: 1240758146}
+  - component: {fileID: 1240758145}
+  - component: {fileID: 1240758144}
+  - component: {fileID: 1240758150}
+  - component: {fileID: 1240758149}
+  m_Layer: 0
+  m_Name: AriadneTS Runtime
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1240758144
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 52e5fdca152a470c8efdcf477680ac6d, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  controller: {fileID: 1240758146}
+--- !u!114 &1240758145
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 601b160e9aa64744abcac606bcb88341, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  controller: {fileID: 1240758146}
+  packageAsset: {fileID: 4900000, guid: 951a627d1a9a8486281376ac83bbf3ee, type: 3}
+  startOnStart: 1
+  stopOnDestroy: 1
+--- !u!114 &1240758146
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 17a5848b538d143ab832b6a5ca69befa, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  runtimeHost: {fileID: 1240758147}
+  packageSigningPublicKey: RSA1.sRhn3i1gp5-6JB47hI7wULsirTF8EBN7vzB45VNIuyqLtFyxyys83kRY7Qmdo5c3DbyyTY1LAkefAy_Ty1rMwAI3bAWVTQmsYHqVKCK1zVI0tIgglR3NSpADSWhhpH2CsGiXejsOUSbTTpFibdlzlSKL4Df7WzC0A6PLJLr-x-ji8PoXT8_a7nHKk3efWEkVeXV7pDDmXbYPtqSDIgB3bm8OW9Rv-oEm4dlaLV17Zj7DhiXsHz8qSBkJKrt9afAJNCs-geD2zEfEC2KbuVMK1bHPaNK7Xaj4-dHCusGcDUp0edACmOCZ2E5dP0JIHPqgXlMONldqWg6tHAmogX4PPe4Vqlh5exlP7Rrk-dq-XjM5X7ZjHGo5gQpjVRSzXgRHFW3vk43NSi1imP13zNwLzEU9fg5W4Q_qxOT0B3VRtK-SqGPLfE_nCpFCGqKh5ngJ_fsgTvuitbsO5v3VJF-bVXrh4Hu83P59JQB5qZsdf3QITBjxRGpxu9Zvh-4ehHqp.AQAB
+--- !u!114 &1240758147
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cadc8ca750ad4441bb92615cde5a4bf1, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  entryModule: bootstrap.js
+  memoryLimitBytes: 67108864
+  maxStackSizeBytes: 1048576
+  executionTimeoutMilliseconds: 1000
+  maxJobsPerFrame: 1024
+  autoStart: 0
+  diagnosticMode: 0
+  writeScriptLogFile: 0
+  scriptLogFileName: AriadneTS/script.log
+  enableScriptDebugging: 1
+  debugProtocol: 1
+  debugHost: 127.0.0.1
+  debugBasePort: 9229
+  debugInstanceId: 0
+  debugRole: Client
+  waitForDebugger: 0
+--- !u!4 &1240758148
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1240758149
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b62bf0699f34efe9fedc8a0d36825b0, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  controller: {fileID: 1240758146}
+--- !u!114 &1240758150
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1240758143}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0e49085ec25542c993672c83c67c957e, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  controller: {fileID: 1240758146}
+  actorRoot: {fileID: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -528,4 +568,4 @@ SceneRoots:
   - {fileID: 330585546}
   - {fileID: 410087041}
   - {fileID: 832575519}
-  - {fileID: 526184523}
+  - {fileID: 1240758148}

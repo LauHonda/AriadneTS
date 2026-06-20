@@ -27,7 +27,12 @@ namespace AriadneTS.Runtime
             ulong memoryLimitBytes = 0,
             ulong maxStackSizeBytes = 1024 * 1024,
             uint executionTimeoutMilliseconds = 1000,
-            Func<string, string, string> hostInvoker = null)
+            Func<string, string, string> hostInvoker = null,
+            bool debugEnabled = false,
+            uint debugProtocol = 0,
+            string debugHost = "127.0.0.1",
+            ushort debugPort = 0,
+            bool debugWaitForAttach = false)
         {
             this.logHandler = logHandler ?? throw new ArgumentNullException(nameof(logHandler));
             this.moduleLoader = moduleLoader;
@@ -54,6 +59,11 @@ namespace AriadneTS.Runtime
                 ExecutionTimeoutMilliseconds = executionTimeoutMilliseconds,
                 HostInvokeCallback = HostInvokeCallback,
                 HostInvokeUserData = GCHandle.ToIntPtr(selfHandle),
+                DebugEnabled = debugEnabled ? 1u : 0u,
+                DebugProtocol = debugProtocol,
+                DebugHost = debugHost ?? "127.0.0.1",
+                DebugPort = debugPort,
+                DebugWaitForAttach = debugWaitForAttach ? 1u : 0u,
             };
 
             nativeRuntime = NativeMethods.ts_runtime_create(ref config);

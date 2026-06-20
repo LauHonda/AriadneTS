@@ -1,0 +1,82 @@
+{
+  "name": "ariadnets-debugger",
+  "displayName": "AriadneTS Debugger",
+  "description": "VSCode debug adapter for AriadneTS Unity and Unreal script runtimes.",
+  "version": "0.1.0",
+  "publisher": "ariadnets",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "ariadnets",
+        "label": "AriadneTS",
+        "runtime": "node",
+        "program": "./adapter/ariadnets-debug-adapter.mjs",
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {
+              "host": {
+                "type": "string",
+                "default": "127.0.0.1",
+                "description": "AriadneTS debug endpoint host."
+              },
+              "port": {
+                "type": "number",
+                "default": 9229,
+                "description": "AriadneTS debug endpoint port."
+              },
+              "tsRoot": {
+                "type": "string",
+                "default": "${workspaceFolder}/TypeScript",
+                "description": "TypeScript project root used to map VSCode source files to AriadneTS module paths."
+              },
+              "pollIntervalMs": {
+                "type": "number",
+                "default": 250,
+                "description": "How often the adapter polls AriadneTS runtime status."
+              }
+            }
+          },
+          "attach": {
+            "required": [],
+            "properties": {
+              "host": {
+                "type": "string",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "number",
+                "default": 9229
+              },
+              "tsRoot": {
+                "type": "string",
+                "default": "${workspaceFolder}/TypeScript"
+              },
+              "pollIntervalMs": {
+                "type": "number",
+                "default": 250
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "ariadnets",
+            "request": "attach",
+            "name": "Attach AriadneTS",
+            "host": "127.0.0.1",
+            "port": 9229,
+            "tsRoot": "${workspaceFolder}/TypeScript",
+            "pollIntervalMs": 250
+          }
+        ]
+      }
+    ]
+  }
+}

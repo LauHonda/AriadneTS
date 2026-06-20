@@ -1,15 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using AriadneTS.Runtime;
 
 internal static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--debug-adapter-runtime-fixture")
+        {
+            return RunDebugAdapterRuntimeFixture(args);
+        }
+
         var logs = new List<string>();
         var modules = new Dictionary<string, string>
         {
@@ -58,6 +66,147 @@ internal static class Program
         Require(logs.Count == 2, $"Expected two logs, got {logs.Count}.");
         Require(logs[0] == "你好 from managed host", "UTF-8 module log did not match.");
         Require(logs[1] == "managed promise job", "Promise log did not match.");
+
+        using (var runtime = new ScriptRuntime(
+            _ => { },
+            debugEnabled: true,
+            debugHost: "127.0.0.1",
+            debugPort: 39229))
+        using (var client = new TcpClient())
+        {
+            client.Connect("127.0.0.1", 39229);
+            using var stream = client.GetStream();
+            var buffer = new byte[256];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            var greeting = Encoding.UTF8.GetString(buffer, 0, read);
+            Require(
+                greeting.Contains("AriadneTS debug endpoint connected", StringComparison.Ordinal),
+                "Debug endpoint greeting did not match.");
+            Require(stream.Read(buffer, 0, buffer.Length) == 0, "Debug endpoint should close verification clients.");
+        }
+
+        using (var debugRuntimeReady = new ManualResetEventSlim(false))
+        using (var startPausedScript = new ManualResetEventSlim(false))
+        {
+            const int checkpointDebugPort = 49330;
+            logs.Clear();
+            var pausedScript = Task.Run(() =>
+            {
+                using var runtime = new ScriptRuntime(
+                    logs.Add,
+                    debugEnabled: true,
+                    debugHost: "127.0.0.1",
+                    debugPort: checkpointDebugPort);
+                debugRuntimeReady.Set();
+                startPausedScript.Wait();
+                runtime.Evaluate("globalThis.__ariadnets_debug_checkpoint('manual.js', 7, 0); host.log('after continue');");
+            });
+
+            Require(debugRuntimeReady.Wait(TimeSpan.FromSeconds(3)), "Debug runtime did not start.");
+            Require(
+                logs.Contains("AriadneTS debug endpoint is listening"),
+                "Debug endpoint did not report listening.");
+            Require(
+                !logs.Contains("AriadneTS debug endpoint failed: thread creation failed"),
+                "Debug endpoint thread creation failed.");
+            var status = SendDebugCommand(checkpointDebugPort, "status\n");
+            Require(status.Contains("\"state\":\"running\"", StringComparison.Ordinal), "Debug status should start as running.");
+            startPausedScript.Set();
+            Thread.Sleep(200);
+            Require(!pausedScript.IsCompleted, "Debug checkpoint should pause script execution.");
+            Require(
+                logs.Exists(message => message.Contains("AriadneTS paused at manual.js:7:0", StringComparison.Ordinal)),
+                "Debug checkpoint did not report paused location.");
+
+            status = SendDebugCommand(checkpointDebugPort, "status\n");
+            Require(status.Contains("\"state\":\"paused\"", StringComparison.Ordinal), "Debug status should report paused.");
+            Require(status.Contains("\"module\":\"manual.js\"", StringComparison.Ordinal), "Debug status module did not match.");
+            Require(status.Contains("\"line\":7", StringComparison.Ordinal), "Debug status line did not match.");
+
+            var response = SendDebugCommand(checkpointDebugPort, "continue\n");
+            Require(response.Contains("continued", StringComparison.Ordinal), "Debug continue response did not match.");
+            Require(pausedScript.Wait(TimeSpan.FromSeconds(3)), "Debug checkpoint did not resume after continue.");
+            Require(logs.Contains("after continue"), "Script did not continue after debug checkpoint.");
+        }
+
+        using (var debugRuntimeReady = new ManualResetEventSlim(false))
+        using (var startDynamicScript = new ManualResetEventSlim(false))
+        {
+            const int dynamicDebugPort = 49331;
+            logs.Clear();
+            var dynamicScript = Task.Run(() =>
+            {
+                using var runtime = new ScriptRuntime(
+                    logs.Add,
+                    debugEnabled: true,
+                    debugHost: "127.0.0.1",
+                    debugPort: dynamicDebugPort);
+                debugRuntimeReady.Set();
+                startDynamicScript.Wait();
+                runtime.Evaluate("globalThis.__ariadnets_debug_line('dynamic.ts', 5, 0); host.log('after dynamic continue');");
+            });
+
+            Require(debugRuntimeReady.Wait(TimeSpan.FromSeconds(3)), "Dynamic debug runtime did not start.");
+            var response = SendDebugCommand(dynamicDebugPort, "break dynamic.ts:5\n");
+            Require(response.Contains("breakpoint set", StringComparison.Ordinal), "Dynamic breakpoint was not set.");
+            response = SendDebugCommand(dynamicDebugPort, "breakpoints\n");
+            Require(response.Contains("\"module\":\"dynamic.ts\"", StringComparison.Ordinal), "Breakpoint list module did not match.");
+            Require(response.Contains("\"line\":5", StringComparison.Ordinal), "Breakpoint list line did not match.");
+
+            startDynamicScript.Set();
+            Thread.Sleep(200);
+            Require(!dynamicScript.IsCompleted, "Dynamic breakpoint should pause script execution.");
+
+            var status = SendDebugCommand(dynamicDebugPort, "status\n");
+            Require(status.Contains("\"state\":\"paused\"", StringComparison.Ordinal), "Dynamic status should report paused.");
+            Require(status.Contains("\"module\":\"dynamic.ts\"", StringComparison.Ordinal), "Dynamic status module did not match.");
+
+            response = SendDebugCommand(dynamicDebugPort, "continue\n");
+            Require(response.Contains("continued", StringComparison.Ordinal), "Dynamic continue response did not match.");
+            Require(dynamicScript.Wait(TimeSpan.FromSeconds(3)), "Dynamic breakpoint did not resume after continue.");
+            Require(logs.Contains("after dynamic continue"), "Script did not continue after dynamic breakpoint.");
+        }
+
+        using (var debugRuntimeReady = new ManualResetEventSlim(false))
+        using (var startJsonScript = new ManualResetEventSlim(false))
+        {
+            const int jsonDebugPort = 49332;
+            logs.Clear();
+            var jsonScript = Task.Run(() =>
+            {
+                using var runtime = new ScriptRuntime(
+                    logs.Add,
+                    debugEnabled: true,
+                    debugHost: "127.0.0.1",
+                    debugPort: jsonDebugPort);
+                debugRuntimeReady.Set();
+                startJsonScript.Wait();
+                runtime.Evaluate("globalThis.__ariadnets_debug_line('json.ts', 9, 0); host.log('after json continue');");
+            });
+
+            Require(debugRuntimeReady.Wait(TimeSpan.FromSeconds(3)), "JSON debug runtime did not start.");
+            var response = SendDebugCommand(jsonDebugPort, "{\"command\":\"setBreakpoint\",\"module\":\"json.ts\",\"line\":9}\n");
+            Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "JSON breakpoint was not set.");
+            response = SendDebugCommand(jsonDebugPort, "{\"command\":\"listBreakpoints\"}\n");
+            Require(response.Contains("\"module\":\"json.ts\"", StringComparison.Ordinal), "JSON breakpoint list module did not match.");
+
+            startJsonScript.Set();
+            Thread.Sleep(200);
+            Require(!jsonScript.IsCompleted, "JSON dynamic breakpoint should pause script execution.");
+
+            var status = SendDebugCommand(jsonDebugPort, "{\"command\":\"status\"}\n");
+            Require(status.Contains("\"state\":\"paused\"", StringComparison.Ordinal), "JSON status should report paused.");
+            Require(status.Contains("\"module\":\"json.ts\"", StringComparison.Ordinal), "JSON status module did not match.");
+
+            response = SendDebugCommand(jsonDebugPort, "{\"command\":\"continue\"}\n");
+            Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "JSON continue response did not match.");
+            Require(jsonScript.Wait(TimeSpan.FromSeconds(3)), "JSON dynamic breakpoint did not resume after continue.");
+            Require(logs.Contains("after json continue"), "Script did not continue after JSON breakpoint.");
+        }
+
+        RunDebugStepScenario(logs, 49333, 10, "{\"command\":\"next\"}\n", 11, "Step over did not stop after nested call.");
+        RunDebugStepScenario(logs, 49334, 10, "{\"command\":\"stepIn\"}\n", 20, "Step in did not enter nested call.");
+        RunDebugStepScenario(logs, 49335, 20, "{\"command\":\"stepOut\"}\n", 11, "Step out did not return to caller.");
 
         try
         {
@@ -147,9 +296,108 @@ internal static class Program
         }
 
         TestScriptPackageReader();
+        TestUnityProjectScriptPackage(logs);
 
         Console.WriteLine("managed runtime smoke test passed");
         return 0;
+    }
+
+    private static int RunDebugAdapterRuntimeFixture(string[] args)
+    {
+        var port = args.Length > 1 && int.TryParse(args[1], out var parsedPort)
+            ? parsedPort
+            : 49391;
+        var logs = new List<string>();
+        using var runtime = new ScriptRuntime(
+            logs.Add,
+            debugEnabled: true,
+            debugHost: "127.0.0.1",
+            debugPort: (ushort)port);
+
+        Console.WriteLine("READY");
+        Console.Out.Flush();
+
+        var command = Console.ReadLine();
+        if (command != "RUN")
+        {
+            return 2;
+        }
+
+        runtime.Evaluate(
+            "const payload = { deltaTime: 1.25 };" +
+            "globalThis.__ariadnets_debug_line('src/game-application.ts', 87, 4, 'onTick', { payload });" +
+            "host.log('after first stop');" +
+            "globalThis.__ariadnets_debug_line('src/game-application.ts', 88, 4, 'onTick', { payload });" +
+            "host.log('after dap continue');",
+            "dap-fixture.js");
+        Require(logs.Contains("after dap continue"), "DAP fixture script did not continue.");
+        Console.WriteLine("DONE");
+        return 0;
+    }
+
+    private static void TestUnityProjectScriptPackage(List<string> logs)
+    {
+        var unityProjectDirectory = Path.GetFullPath(
+            Path.Combine(AppContext.BaseDirectory, "../../../../UnityProject"));
+        var packagePath = Path.Combine(unityProjectDirectory, "Assets/typescript-package.bytes");
+        var publicKeyPath = Path.Combine(unityProjectDirectory, "Assets/public-key.txt");
+        if (!File.Exists(packagePath) || !File.Exists(publicKeyPath))
+        {
+            return;
+        }
+
+        var reader = new ScriptPackageReader(
+            File.ReadAllText(publicKeyPath).Trim(),
+            bytes => JsonSerializer.Deserialize<ScriptPackageManifest>(
+                bytes,
+                new JsonSerializerOptions { IncludeFields = true }));
+        var package = reader.Read(File.ReadAllBytes(packagePath));
+
+        logs.Clear();
+        using var runtime = new ScriptRuntime(
+            logs.Add,
+            package.LoadModule,
+            hostInvoker: CreateDemoHostInvoker("UnityProjectPackage"));
+        runtime.EvaluateModule(
+            package.LoadModule(package.Manifest.EntryModule),
+            package.Manifest.EntryModule);
+        runtime.Invoke("onBeginPlay");
+        runtime.Invoke("onTick", "{\"deltaTime\":1.25}");
+        runtime.ExecutePendingJobs();
+        var greeting = runtime.Invoke("demo.greet", "{\"message\":\"Hello from C#\"}");
+        Require(
+            greeting == "{\"reply\":\"Hello from TypeScript, Hello from C#\"}",
+            $"Unexpected Unity project package result: {greeting}");
+        runtime.Invoke("onEndPlay");
+    }
+
+    private static Func<string, string, string> CreateDemoHostInvoker(string engineName)
+    {
+        return (method, payload) =>
+        {
+            if (method == "ariadnets.log")
+            {
+                return "null";
+            }
+            if (method == "ariadnets.async.begin")
+            {
+                return "{\"ok\":true,\"result\":{\"requestId\":1}}";
+            }
+            if (method == "actors.create")
+            {
+                return "{\"ok\":true,\"result\":{\"id\":1,\"name\":\"DemoPlayer\"}}";
+            }
+            if (method == "actors.setTransform" || method == "actors.setParent" || method == "actors.destroy")
+            {
+                return "{\"ok\":true,\"result\":null}";
+            }
+
+            Require(method == "demo.getPlayer", $"Unexpected demo host method: {method}");
+            Require(
+                payload == "{\"requestedBy\":\"TypeScript\"}",
+                $"Unexpected demo host payload: {payload}");
+            return $"{{\"name\":\"Ariadne\",\"engine\":\"{engineName}\"}}";
+        };
     }
 
     private static void TestScriptPackageReader()
@@ -249,6 +497,104 @@ internal static class Program
         return BitConverter.ToString(sha256.ComputeHash(data))
             .Replace("-", string.Empty)
             .ToLowerInvariant();
+    }
+
+    private static void RunDebugStepScenario(
+        List<string> logs,
+        int port,
+        int breakpointLine,
+        string stepCommand,
+        int expectedLine,
+        string failureMessage)
+    {
+        using var runtimeReady = new ManualResetEventSlim(false);
+        using var startScript = new ManualResetEventSlim(false);
+        logs.Clear();
+        var script = Task.Run(() =>
+        {
+            using var runtime = new ScriptRuntime(
+                logs.Add,
+                debugEnabled: true,
+                debugHost: "127.0.0.1",
+                debugPort: (ushort)port);
+            runtimeReady.Set();
+            startScript.Wait();
+            runtime.Evaluate(
+                "function inner() {" +
+                "globalThis.__ariadnets_debug_line('step.ts', 20, 0, 'inner', {}, 'at inner (step.ts:20:0)\\nat outer (step.ts:10:0)');" +
+                "host.log('inner body');" +
+                "}" +
+                "function outer() {" +
+                "globalThis.__ariadnets_debug_line('step.ts', 10, 0, 'outer', {}, 'at outer (step.ts:10:0)');" +
+                "inner();" +
+                "globalThis.__ariadnets_debug_line('step.ts', 11, 0, 'outer', {}, 'at outer (step.ts:11:0)');" +
+                "host.log('outer after');" +
+                "}" +
+                "outer();",
+                "step-fixture.js");
+        });
+
+        Require(runtimeReady.Wait(TimeSpan.FromSeconds(3)), "Step debug runtime did not start.");
+        var response = SendDebugCommand(port, $"{{\"command\":\"setBreakpoint\",\"module\":\"step.ts\",\"line\":{breakpointLine}}}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Step breakpoint was not set.");
+
+        startScript.Set();
+        Thread.Sleep(200);
+        Require(!script.IsCompleted, "Step scenario should pause at initial breakpoint.");
+
+        var status = SendDebugCommand(port, "{\"command\":\"status\"}\n");
+        Require(status.Contains($"\"line\":{breakpointLine}", StringComparison.Ordinal), "Step scenario initial line did not match.");
+
+        response = SendDebugCommand(port, stepCommand);
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Step command response did not continue.");
+        Thread.Sleep(200);
+        Require(!script.IsCompleted, "Step scenario should pause after step command.");
+
+        status = SendDebugCommand(port, "{\"command\":\"status\"}\n");
+        Require(status.Contains($"\"line\":{expectedLine}", StringComparison.Ordinal), failureMessage);
+
+        response = SendDebugCommand(port, "{\"command\":\"continue\"}\n");
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Step scenario continue response did not match.");
+        Require(script.Wait(TimeSpan.FromSeconds(3)), "Step scenario did not finish after continue.");
+        Require(logs.Contains("outer after"), "Step scenario did not finish script body.");
+    }
+
+    private static string SendDebugCommand(int port, string command)
+    {
+        using var client = new TcpClient();
+        var connected = false;
+        Exception lastConnectException = null;
+        for (var attempt = 0; attempt < 20 && !connected; ++attempt)
+        {
+            try
+            {
+                client.Connect("127.0.0.1", port);
+                connected = true;
+            }
+            catch (SocketException exception)
+            {
+                lastConnectException = exception;
+                Thread.Sleep(50);
+            }
+        }
+        if (!connected)
+        {
+            throw new InvalidOperationException("Could not connect to debug endpoint.", lastConnectException);
+        }
+
+        using var stream = client.GetStream();
+
+        var buffer = new byte[512];
+        var read = stream.Read(buffer, 0, buffer.Length);
+        var greeting = Encoding.UTF8.GetString(buffer, 0, read);
+        Require(
+            greeting.Contains("AriadneTS debug endpoint connected", StringComparison.Ordinal),
+            "Debug command endpoint greeting did not match.");
+
+        var commandBytes = Encoding.UTF8.GetBytes(command);
+        stream.Write(commandBytes, 0, commandBytes.Length);
+        read = stream.Read(buffer, 0, buffer.Length);
+        return Encoding.UTF8.GetString(buffer, 0, read);
     }
 
     private static string EncodeBase64Url(byte[] data)

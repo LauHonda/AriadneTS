@@ -62,6 +62,12 @@ namespace AriadneTS.Runtime
             internal uint ExecutionTimeoutMilliseconds;
             internal HostInvokeCallback HostInvokeCallback;
             internal IntPtr HostInvokeUserData;
+            internal uint DebugEnabled;
+            internal uint DebugProtocol;
+            [MarshalAs(UnmanagedType.LPStr)]
+            internal string DebugHost;
+            internal ushort DebugPort;
+            internal uint DebugWaitForAttach;
         }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

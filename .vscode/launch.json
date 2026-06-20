@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "ariadnets",
+      "request": "attach",
+      "name": "Attach AriadneTS",
+      "host": "127.0.0.1",
+      "port": 9229,
+      "tsRoot": "${workspaceFolder}/TypeScript",
+      "pollIntervalMs": 250
+    }
+  ]
+}

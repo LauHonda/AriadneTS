@@ -72,6 +72,27 @@ namespace AriadneTS.Runtime
         [SerializeField]
         private string scriptLogFileName = "AriadneTS/script.log";
 
+        [SerializeField]
+        private bool enableScriptDebugging = false;
+
+        [SerializeField]
+        private ScriptDebugProtocol debugProtocol = ScriptDebugProtocol.ChromeDevTools;
+
+        [SerializeField]
+        private string debugHost = "127.0.0.1";
+
+        [SerializeField]
+        private int debugBasePort = 9229;
+
+        [SerializeField]
+        private int debugInstanceId = 0;
+
+        [SerializeField]
+        private string debugRole = "Client";
+
+        [SerializeField]
+        private bool waitForDebugger = false;
+
         private ScriptRuntime runtime;
         private Func<string, string> moduleLoader;
         private ScriptPackageManifest activeManifest;
@@ -80,6 +101,14 @@ namespace AriadneTS.Runtime
             new Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
 
         public bool IsRunning => runtime != null;
+        public bool EnableScriptDebugging => enableScriptDebugging;
+        public ScriptDebugProtocol DebugProtocol => debugProtocol;
+        public string DebugHost => debugHost;
+        public int DebugBasePort => debugBasePort;
+        public int DebugInstanceId => debugInstanceId;
+        public string DebugRole => debugRole;
+        public bool WaitForDebugger => waitForDebugger;
+        public int DebugPort => ComputeDebugPort(debugBasePort, debugInstanceId);
 
         public void RegisterHostHandler(string method, Func<string, string> handler)
         {
@@ -191,13 +220,24 @@ namespace AriadneTS.Runtime
             }
 
             RegisterBuiltInHostHandlers();
+            ReportPackageConfiguration();
+            ReportDebugConfiguration();
+            if (enableScriptDebugging)
+            {
+                Application.runInBackground = true;
+            }
             runtime = new ScriptRuntime(
                 Debug.Log,
                 moduleLoader,
                 memoryLimitBytes,
                 maxStackSizeBytes,
                 executionTimeoutMilliseconds,
-                InvokeHost);
+                InvokeHost,
+                enableScriptDebugging,
+                (uint)debugProtocol,
+                string.IsNullOrWhiteSpace(debugHost) ? "127.0.0.1" : debugHost,
+                (ushort)DebugPort,
+                waitForDebugger);
             try
             {
                 runtime.EvaluateModule(entrySource, entryModule);
@@ -381,6 +421,64 @@ namespace AriadneTS.Runtime
                     hostHandlers.Add(method, payloadJson => HandleNotImplementedBridge(method, payloadJson));
                 }
             }
+        }
+
+        private void ReportDebugConfiguration()
+        {
+            if (!enableScriptDebugging)
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                "AriadneTS script debugging is configured for " +
+                debugProtocol +
+                " at " +
+                (string.IsNullOrWhiteSpace(debugHost) ? "127.0.0.1" : debugHost) +
+                ":" +
+                DebugPort.ToString(CultureInfo.InvariantCulture) +
+                " role=" +
+                (string.IsNullOrWhiteSpace(debugRole) ? "Client" : debugRole) +
+                " waitForDebugger=" +
+                waitForDebugger.ToString(CultureInfo.InvariantCulture) +
+                ". A TCP debug endpoint will listen on this address and accepts AriadneTS breakpoint commands.");
+        }
+
+        private void ReportPackageConfiguration()
+        {
+            if (activeManifest == null)
+            {
+                Debug.Log(
+                    "AriadneTS starting script runtime. Entry: " +
+                    entryModule +
+                    ".");
+                return;
+            }
+
+            Debug.Log(
+                "AriadneTS starting script package " +
+                activeManifest.Version +
+                " build " +
+                activeManifest.BuildNumber.ToString(CultureInfo.InvariantCulture) +
+                ". Entry: " +
+                activeManifest.EntryModule +
+                ". Required ABI: " +
+                activeManifest.RequiredRuntimeAbiVersion.ToString(CultureInfo.InvariantCulture) +
+                ".");
+        }
+
+        private static int ComputeDebugPort(int basePort, int instanceId)
+        {
+            var port = basePort + instanceId;
+            if (port < 1)
+            {
+                return 1;
+            }
+            if (port > 65535)
+            {
+                return 65535;
+            }
+            return port;
         }
 
         private static string HandleScriptLog(string payloadJson)

@@ -15,9 +15,11 @@ engine-independent QuickJS runtime.
 
 ## Status
 
-AriadneTS currently supports Unity `6000.0.77f1`. Unreal support is planned but
-not implemented. The project is experimental and should be validated on target
-devices before production use.
+AriadneTS currently targets Unity `6000.0.77f1` and includes an Unreal Engine
+`5.0+` plugin under `UnrealPlugins/AriadneTS`. Unity has the primary validation
+path today; Unreal mirrors the same TypeScript template, package builder,
+debugger setup, and runtime concepts, but still needs full validation inside a
+real Unreal project before production use.
 
 ## Highlights
 
@@ -25,6 +27,8 @@ devices before production use.
 - The native C ABI is independent of Unity and can support future hosts.
 - Unity plugins are included for Windows x86_64, macOS Universal, Android
   arm64/x86_64, and iOS arm64.
+- Unreal plugin source is included as a separate plugin folder with editor menu
+  actions and Project Settings for project integration.
 - Signed single-file `.bytes` packages work naturally with Addressables.
 - Package validation happens before the active runtime is touched.
 - Runtime switching supports `beforeReload` and `afterReload` state handoff.
@@ -117,6 +121,19 @@ If a new package fails during startup or state restoration, the previous
 runtime is restored. Unity remains responsible for selecting the next
 Addressables version.
 
+### Unreal Plugin Preview
+
+Copy or link the plugin folder into an Unreal project:
+
+```text
+UnrealPlugins/AriadneTS -> YourProject/Plugins/AriadneTS
+```
+
+Then regenerate project files and enable the plugin in Unreal Editor. Configure
+defaults in **Project Settings > Plugins > AriadneTS**, then use
+`Tools > AriadneTS` to initialize TypeScript, generate keys, build packages,
+install the VSCode debugger, create launch config, and create a runtime host.
+
 ## TypeScript Lifecycle
 
 The entry module installs `globalThis.__ariadnets_invoke` and handles:
@@ -144,6 +161,8 @@ See [Unity deployment](Documentation/unity-deployment.md) and
 The included bidirectional example is documented in
 [Unity Demo](Documentation/demo.md).
 Script error behavior is documented in [Debugging](Documentation/debugging.md).
+Script debugger endpoint configuration is documented in
+[Script Debugging](Documentation/script-debugging.md).
 
 ## Repository Layout
 
@@ -151,6 +170,7 @@ Script error behavior is documented in [Debugging](Documentation/debugging.md).
 Native/          Engine-independent C ABI and QuickJS backend
 TypeScript/      Reference TypeScript business project
 UnityPackages/   Unity UPM package and native plugins
+UnrealPlugins/   Unreal Engine plugin preview
 UnityProject/    Reproducible Unity integration example
 Tools/           Build, signing, packaging, and verification tools
 ManagedTests/    Managed/native integration tests
