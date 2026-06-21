@@ -64,6 +64,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AriadneTS|Debug")
     bool bWaitForDebugger = false;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AriadneTS|Debug", meta = (ClampMin = "0", ClampMax = "5000"))
+    int32 DebugStartupGraceMilliseconds = 1000;
+
     UFUNCTION(BlueprintCallable, Category = "AriadneTS|Debug")
     int32 GetDebugPort() const;
 

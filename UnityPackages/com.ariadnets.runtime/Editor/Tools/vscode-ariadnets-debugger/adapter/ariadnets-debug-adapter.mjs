@@ -163,7 +163,7 @@ class AriadneTsClient {
       socket.on("connect", () => {});
       socket.on("data", (chunk) => {
         response += chunk;
-        if (!sawGreeting && response.includes("Native breakpoint protocol")) {
+        if (!sawGreeting && response.includes("Commands:")) {
           sawGreeting = true;
           response = "";
           socket.write(`${JSON.stringify(payload)}\n`);
@@ -188,11 +188,13 @@ class AriadneDebugSession {
     this.pollTimer = undefined;
     this.pendingBreakpoints = new Map();
     this.probeLinesByModule = new Map();
+    this.sourceMapCache = new Map();
     this.appliedBreakpointKey = "";
     this.variableHandles = new Map();
     this.nextVariableHandle = 1;
     this.lastStatus = { state: "running", module: "", line: 0, column: 0 };
     this.wasPaused = false;
+    this.lastStoppedPauseId = 0;
     this.wasRuntimeConnected = false;
     this.threadId = 1;
 
@@ -209,7 +211,7 @@ class AriadneDebugSession {
         supportsStepOutRequest: true,
         supportsNextRequest: true,
         supportsSetVariable: false,
-        supportsEvaluateForHovers: false,
+        supportsEvaluateForHovers: true,
         supportsStepBack: false,
       };
     });
@@ -238,6 +240,7 @@ class AriadneDebugSession {
     this.dap.on("stackTrace", async () => this.stackTrace());
     this.dap.on("scopes", async () => this.scopes());
     this.dap.on("variables", async (args) => this.variables(args));
+    this.dap.on("evaluate", async (args) => this.evaluate(args));
     this.dap.on("continue", async () => {
       await this.client.command({ command: "continue" });
       this.wasPaused = false;
@@ -263,6 +266,7 @@ class AriadneDebugSession {
       this.tsRoot = path.resolve(args.tsRoot);
     }
     this.refreshProbeIndex();
+    this.sourceMapCache.clear();
     if (args.pollIntervalMs) {
       this.pollIntervalMs = Math.max(100, Number(args.pollIntervalMs));
     }
@@ -352,12 +356,21 @@ class AriadneDebugSession {
       this.wasRuntimeConnected = true;
       this.lastStatus = status;
       const isPaused = status.state === "paused";
-      if (isPaused && !this.wasPaused) {
+      const pauseId = Number(status.pauseId ?? 0);
+      const isNewPause = pauseId > 0
+        ? pauseId !== this.lastStoppedPauseId
+        : !this.wasPaused;
+      if (isPaused && isNewPause) {
         this.wasPaused = true;
+        if (pauseId > 0) {
+          this.lastStoppedPauseId = pauseId;
+        }
         this.variableHandles.clear();
         this.nextVariableHandle = 1;
         this.dap.sendEvent("stopped", {
           reason: "breakpoint",
+          description: this.describePausedStatus(status),
+          text: this.describePausedStatus(status),
           threadId: this.threadId,
           allThreadsStopped: true,
         });
@@ -377,7 +390,7 @@ class AriadneDebugSession {
     const status = this.lastStatus?.state === "paused"
       ? this.lastStatus
       : await this.safeStatus();
-    const runtimeStack = await this.safeStack();
+    const runtimeStack = await this.safeStack(status);
     const frames = this.parseRuntimeStack(runtimeStack, status);
     if (frames.length > 0) {
       return {
@@ -393,6 +406,13 @@ class AriadneDebugSession {
     };
   }
 
+  describePausedStatus(status) {
+    const modulePath = status?.module || "unknown.ts";
+    const line = Math.max(1, Number(status?.line || 1));
+    const name = status?.function || "AriadneTS";
+    return `${name} at ${modulePath}:${line}`;
+  }
+
   async safeStatus() {
     try {
       return await this.client.command({ command: "status" });
@@ -401,8 +421,8 @@ class AriadneDebugSession {
     }
   }
 
-  async safeStack() {
-    if (this.lastStatus?.state !== "paused") {
+  async safeStack(status) {
+    if (status?.state !== "paused") {
       return "";
     }
     try {
@@ -476,16 +496,80 @@ class AriadneDebugSession {
       return undefined;
     }
 
+    const mapped = this.mapGeneratedLocationToSource(modulePath, lineNumber, columnNumber);
     return {
       id,
       name: this.cleanStackFunctionName(name),
       source: {
-        name: path.basename(modulePath),
-        path: this.toSourcePath(modulePath),
+        name: path.basename(mapped.path),
+        path: mapped.path,
       },
+      line: mapped.line,
+      column: mapped.column,
+    };
+  }
+
+  mapGeneratedLocationToSource(modulePath, lineNumber, columnNumber) {
+    const fallback = {
+      path: this.toSourcePath(modulePath),
       line: Math.max(1, lineNumber || 1),
       column: Math.max(1, columnNumber || 1),
     };
+    if (!modulePath.endsWith(".js")) {
+      return fallback;
+    }
+
+    const generatedPath = path.isAbsolute(modulePath)
+      ? modulePath
+      : path.join(this.tsRoot, "dist", modulePath);
+    const sourceMap = this.loadSourceMap(generatedPath);
+    if (!sourceMap) {
+      return fallback;
+    }
+
+    const mapping = findSourceMapMapping(
+      sourceMap,
+      Math.max(1, lineNumber || 1),
+      Math.max(0, (columnNumber || 1) - 1),
+    );
+    if (!mapping) {
+      return fallback;
+    }
+
+    const source = sourceMap.sources[mapping.sourceIndex];
+    if (!source) {
+      return fallback;
+    }
+
+    const sourceRoot = sourceMap.sourceRoot || "";
+    return {
+      path: path.resolve(path.dirname(generatedPath), sourceRoot, source),
+      line: mapping.originalLine + 1,
+      column: mapping.originalColumn + 1,
+    };
+  }
+
+  loadSourceMap(generatedPath) {
+    const mapPath = `${generatedPath}.map`;
+    if (this.sourceMapCache.has(mapPath)) {
+      return this.sourceMapCache.get(mapPath);
+    }
+    if (!fs.existsSync(mapPath)) {
+      this.sourceMapCache.set(mapPath, undefined);
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(mapPath, "utf8"));
+      if (!Array.isArray(parsed.sources) || typeof parsed.mappings !== "string") {
+        this.sourceMapCache.set(mapPath, undefined);
+        return undefined;
+      }
+      this.sourceMapCache.set(mapPath, parsed);
+      return parsed;
+    } catch {
+      this.sourceMapCache.set(mapPath, undefined);
+      return undefined;
+    }
   }
 
   cleanStackFunctionName(name) {
@@ -511,15 +595,24 @@ class AriadneDebugSession {
   }
 
   scopes() {
-    const variablesReference = this.storeVariablesReference({
+    const localsReference = this.storeVariablesReference({
       kind: "locals",
       values: null,
+    });
+    const runtimeReference = this.storeVariablesReference({
+      kind: "runtime",
+      values: this.runtimeScopeValues(),
     });
     return {
       scopes: [
         {
           name: "Locals",
-          variablesReference,
+          variablesReference: localsReference,
+          expensive: false,
+        },
+        {
+          name: "AriadneTS Runtime",
+          variablesReference: runtimeReference,
           expensive: false,
         },
       ],
@@ -533,14 +626,171 @@ class AriadneDebugSession {
     }
 
     if (handle.kind === "locals" && handle.values === null) {
-      const response = await this.client.command({ command: "variables" });
-      handle.values = response.variables ?? {};
+      try {
+        const response = await this.client.command({ command: "variables" });
+        handle.values = response.variables ?? {};
+      } catch (error) {
+        handle.values = {
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
 
     return {
       variables: Object.entries(handle.values ?? {}).map(([name, value]) =>
         this.toDebugVariable(name, value),
       ),
+    };
+  }
+
+  async evaluate(args) {
+    const expression = String(args.expression ?? "").trim();
+    if (!expression) {
+      return this.toEvaluationResult(undefined);
+    }
+
+    if (this.lastStatus?.state !== "paused") {
+      throw new Error("AriadneTS is not paused.");
+    }
+
+    const locals = await this.currentLocals();
+    const runtime = this.runtimeScopeValues();
+    const resolution = this.resolveDebugExpression(expression, locals, runtime);
+    if (!resolution.found) {
+      throw new Error(`Unsupported or unavailable expression: ${expression}`);
+    }
+    return this.toEvaluationResult(resolution.value);
+  }
+
+  async currentLocals() {
+    try {
+      const response = await this.client.command({ command: "variables" });
+      return response.variables ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  resolveDebugExpression(expression, locals, runtime) {
+    if (expression === "$runtime") {
+      return { found: true, value: runtime };
+    }
+    if (Object.hasOwn(locals, expression)) {
+      return { found: true, value: locals[expression] };
+    }
+    if (Object.hasOwn(runtime, expression)) {
+      return { found: true, value: runtime[expression] };
+    }
+
+    const pathParts = this.parseDebugExpressionPath(expression);
+    if (pathParts.length === 0) {
+      return { found: false, value: undefined };
+    }
+
+    let value;
+    let found = false;
+    const root = pathParts[0];
+    if (root === "$runtime") {
+      value = runtime;
+      found = true;
+    } else if (Object.hasOwn(locals, root)) {
+      value = locals[root];
+      found = true;
+    } else if (Object.hasOwn(runtime, root)) {
+      value = runtime[root];
+      found = true;
+    }
+    if (!found) {
+      return { found: false, value: undefined };
+    }
+
+    for (const part of pathParts.slice(1)) {
+      if (value === null || value === undefined) {
+        return { found: false, value: undefined };
+      }
+      if (typeof value !== "object") {
+        return { found: false, value: undefined };
+      }
+      if (!Object.hasOwn(value, part)) {
+        return { found: false, value: undefined };
+      }
+      value = value[part];
+    }
+    return { found: true, value };
+  }
+
+  parseDebugExpressionPath(expression) {
+    const parts = [];
+    let index = 0;
+    const readIdentifier = () => {
+      const match = expression.slice(index).match(/^[$A-Za-z_][$\w]*/);
+      if (!match) {
+        return undefined;
+      }
+      index += match[0].length;
+      return match[0];
+    };
+
+    const first = readIdentifier();
+    if (!first) {
+      return [];
+    }
+    parts.push(first);
+
+    while (index < expression.length) {
+      if (expression[index] === ".") {
+        ++index;
+        const name = readIdentifier();
+        if (!name) {
+          return [];
+        }
+        parts.push(name);
+        continue;
+      }
+
+      if (expression[index] !== "[") {
+        return [];
+      }
+      ++index;
+      const close = expression.indexOf("]", index);
+      if (close < 0) {
+        return [];
+      }
+      const key = expression.slice(index, close).trim();
+      if (/^\d+$/.test(key)) {
+        parts.push(key);
+      } else {
+        const stringKey = key.match(/^["'](.+)["']$/);
+        if (!stringKey) {
+          return [];
+        }
+        parts.push(stringKey[1]);
+      }
+      index = close + 1;
+    }
+    return parts;
+  }
+
+  toEvaluationResult(value) {
+    const variable = this.toDebugVariable("result", value);
+    return {
+      result: variable.value,
+      type: variable.type,
+      variablesReference: variable.variablesReference,
+    };
+  }
+
+  runtimeScopeValues() {
+    const status = this.lastStatus ?? {};
+    return {
+      state: status.state ?? "unknown",
+      pauseId: Number(status.pauseId ?? 0),
+      module: status.module ?? "",
+      function: status.function ?? "",
+      line: Number(status.line ?? 0),
+      column: Number(status.column ?? 0),
+      endpoint: `${this.client.host}:${this.client.port}`,
+      tsRoot: this.tsRoot,
     };
   }
 
@@ -655,6 +905,109 @@ function listFiles(directory) {
     }
   }
   return results;
+}
+
+function findSourceMapMapping(sourceMap, generatedLine, generatedColumn) {
+  const lines = sourceMap.mappings.split(";");
+  const targetLineIndex = generatedLine - 1;
+  if (targetLineIndex < 0 || targetLineIndex >= lines.length) {
+    return undefined;
+  }
+
+  let sourceIndex = 0;
+  let originalLine = 0;
+  let originalColumn = 0;
+  let nameIndex = 0;
+
+  for (let lineIndex = 0; lineIndex <= targetLineIndex; ++lineIndex) {
+    let generatedColumnCursor = 0;
+    let bestMapping;
+    const segments = lines[lineIndex].split(",");
+    for (const segment of segments) {
+      if (!segment) {
+        continue;
+      }
+      const values = decodeSourceMapSegment(segment);
+      if (values.length === 0) {
+        continue;
+      }
+      generatedColumnCursor += values[0];
+      if (values.length >= 4) {
+        sourceIndex += values[1];
+        originalLine += values[2];
+        originalColumn += values[3];
+        if (values.length >= 5) {
+          nameIndex += values[4];
+        }
+        if (lineIndex === targetLineIndex && generatedColumnCursor <= generatedColumn) {
+          bestMapping = {
+            generatedColumn: generatedColumnCursor,
+            sourceIndex,
+            originalLine,
+            originalColumn,
+            nameIndex,
+          };
+        }
+      }
+    }
+    if (lineIndex === targetLineIndex) {
+      return bestMapping;
+    }
+  }
+  return undefined;
+}
+
+function decodeSourceMapSegment(segment) {
+  const values = [];
+  let index = 0;
+  while (index < segment.length) {
+    const decoded = decodeVlq(segment, index);
+    values.push(decoded.value);
+    index = decoded.nextIndex;
+  }
+  return values;
+}
+
+function decodeVlq(text, startIndex) {
+  let result = 0;
+  let shift = 0;
+  let index = startIndex;
+  while (index < text.length) {
+    const digit = sourceMapBase64Value(text[index]);
+    ++index;
+    result += (digit & 31) << shift;
+    if ((digit & 32) === 0) {
+      break;
+    }
+    shift += 5;
+  }
+
+  const negative = (result & 1) === 1;
+  const value = result >> 1;
+  return {
+    value: negative ? -value : value,
+    nextIndex: index,
+  };
+}
+
+function sourceMapBase64Value(character) {
+  const code = character.charCodeAt(0);
+  if (code >= 65 && code <= 90) {
+    return code - 65;
+  }
+  if (code >= 97 && code <= 122) {
+    return code - 97 + 26;
+  }
+  if (code >= 48 && code <= 57) {
+    return code - 48 + 52;
+  }
+  if (character === "+") {
+    return 62;
+  }
+  if (character === "/") {
+    return 63;
+  }
+  return 0;
 }
 
 new AriadneDebugSession();

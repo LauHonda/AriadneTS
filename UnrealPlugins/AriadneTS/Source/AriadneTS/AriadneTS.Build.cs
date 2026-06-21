@@ -42,5 +42,9 @@ public class AriadneTS : ModuleRules
             PublicAdditionalLibraries.Add(Path.Combine(NativeRoot, "Lib", "Android", "arm64-v8a", "libariadnets.so"));
             PublicAdditionalLibraries.Add(Path.Combine(NativeRoot, "Lib", "Android", "x86_64", "libariadnets.so"));
         }
+        else if (Target.Platform == UnrealTargetPlatform.IOS)
+        {
+            PublicAdditionalLibraries.Add(Path.Combine(NativeRoot, "Lib", "IOS", "libariadnets.a"));
+        }
     }
 }

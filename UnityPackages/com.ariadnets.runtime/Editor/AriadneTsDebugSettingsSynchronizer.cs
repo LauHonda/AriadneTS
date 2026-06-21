@@ -16,6 +16,7 @@ namespace AriadneTS.Editor
         private const string DebugInstanceIdKey = "AriadneTS.ScriptTools.Debug.InstanceId";
         private const string DebugRoleKey = "AriadneTS.ScriptTools.Debug.Role";
         private const string DebugWaitKey = "AriadneTS.ScriptTools.Debug.Wait";
+        private const string DebugStartupGraceKey = "AriadneTS.ScriptTools.Debug.StartupGraceMs";
 
         static AriadneTsDebugSettingsSynchronizer()
         {
@@ -75,6 +76,7 @@ namespace AriadneTS.Editor
             SetInt(serializedObject, "debugInstanceId", Mathf.Max(0, EditorPrefs.GetInt(DebugInstanceIdKey, 0)));
             SetString(serializedObject, "debugRole", EditorPrefs.GetString(DebugRoleKey, "Client"));
             SetBool(serializedObject, "waitForDebugger", EditorPrefs.GetBool(DebugWaitKey, false));
+            SetInt(serializedObject, "debugStartupGraceMilliseconds", Mathf.Clamp(EditorPrefs.GetInt(DebugStartupGraceKey, 1000), 0, 5000));
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
         }
 

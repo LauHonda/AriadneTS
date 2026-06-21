@@ -25,6 +25,7 @@ namespace AriadneTS.Editor
         private const string DebugInstanceIdKey = "AriadneTS.ScriptTools.Debug.InstanceId";
         private const string DebugRoleKey = "AriadneTS.ScriptTools.Debug.Role";
         private const string DebugWaitKey = "AriadneTS.ScriptTools.Debug.Wait";
+        private const string DebugStartupGraceKey = "AriadneTS.ScriptTools.Debug.StartupGraceMs";
         private const float BrowseButtonWidth = 80f;
         private const string RuntimeHostObjectName = "AriadneTS Runtime";
 
@@ -43,6 +44,7 @@ namespace AriadneTS.Editor
         private int debugInstanceId;
         private string debugRole;
         private bool debugWaitForAttach;
+        private int debugStartupGraceMilliseconds;
 
         private static string ProjectRoot =>
             Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -84,6 +86,7 @@ namespace AriadneTS.Editor
             debugInstanceId = EditorPrefs.GetInt(DebugInstanceIdKey, 0);
             debugRole = EditorPrefs.GetString(DebugRoleKey, "Client");
             debugWaitForAttach = EditorPrefs.GetBool(DebugWaitKey, false);
+            debugStartupGraceMilliseconds = EditorPrefs.GetInt(DebugStartupGraceKey, 1000);
             RefreshPublicKey();
         }
 
@@ -371,6 +374,15 @@ namespace AriadneTS.Editor
                 changed = true;
             }
 
+            var nextStartupGrace = EditorGUILayout.IntField("Startup Grace Ms", debugStartupGraceMilliseconds);
+            var clampedStartupGrace = Mathf.Clamp(nextStartupGrace, 0, 5000);
+            if (clampedStartupGrace != debugStartupGraceMilliseconds)
+            {
+                debugStartupGraceMilliseconds = clampedStartupGrace;
+                EditorPrefs.SetInt(DebugStartupGraceKey, debugStartupGraceMilliseconds);
+                changed = true;
+            }
+
             var actualPort = Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535);
             EditorGUILayout.LabelField("Actual Port", actualPort.ToString(CultureInfo.InvariantCulture));
             if (changed)
@@ -382,7 +394,7 @@ namespace AriadneTS.Editor
                 SyncDebugConfiguration();
             }
             EditorGUILayout.HelpBox(
-                "This config is the source of truth for the open scene RuntimeHost and .vscode/launch.json. Use a unique Instance Id per Unity/Unreal client or server process.",
+                "This config is the source of truth for the open scene RuntimeHost and .vscode/launch.json. Startup Grace gives VSCode time to apply onBeginPlay breakpoints when Wait For Debugger is off. Use a unique Instance Id per Unity/Unreal client or server process.",
                 MessageType.Info);
         }
 
@@ -590,19 +602,7 @@ namespace AriadneTS.Editor
 
         private void InitializeVsCodeDebugConfig()
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(VsCodeLaunchJsonPath) ?? ProjectRoot);
-            if (File.Exists(VsCodeLaunchJsonPath))
-            {
-                var existing = File.ReadAllText(VsCodeLaunchJsonPath);
-                if (existing.Contains("\"type\": \"ariadnets\""))
-                {
-                    return;
-                }
-                throw new InvalidOperationException(
-                    "A VSCode launch.json already exists. Add the AriadneTS configuration manually or move the existing file before generating.");
-            }
-
-            File.WriteAllText(VsCodeLaunchJsonPath, CreateVsCodeLaunchJson(), Encoding.UTF8);
+            UpsertVsCodeDebugConfig("127.0.0.1", 9229);
             buildLog = "Created VSCode debug config at:\n" + VsCodeLaunchJsonPath;
             Repaint();
         }
@@ -616,29 +616,6 @@ namespace AriadneTS.Editor
 
             var contents = File.ReadAllText(VsCodeLaunchJsonPath);
             return contents.Contains("\"type\": \"ariadnets\"");
-        }
-
-        private static string CreateVsCodeLaunchJson()
-        {
-            return CreateVsCodeLaunchJson("127.0.0.1", 9229);
-        }
-
-        private static string CreateVsCodeLaunchJson(string host, int port)
-        {
-            return "{\n" +
-                "  \"version\": \"0.2.0\",\n" +
-                "  \"configurations\": [\n" +
-                "    {\n" +
-                "      \"type\": \"ariadnets\",\n" +
-                "      \"request\": \"attach\",\n" +
-                "      \"name\": \"Attach AriadneTS\",\n" +
-                "      \"host\": \"" + JsonEscape(string.IsNullOrWhiteSpace(host) ? "127.0.0.1" : host) + "\",\n" +
-                "      \"port\": " + Mathf.Clamp(port, 1, 65535).ToString(CultureInfo.InvariantCulture) + ",\n" +
-                "      \"tsRoot\": \"${workspaceFolder}/TypeScript\",\n" +
-                "      \"pollIntervalMs\": 250\n" +
-                "    }\n" +
-                "  ]\n" +
-                "}\n";
         }
 
         private void InstallVsCodeDebuggerExtension()
@@ -703,20 +680,24 @@ namespace AriadneTS.Editor
 
         private void WriteOrUpdateVsCodeDebugConfig()
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(VsCodeLaunchJsonPath) ?? ProjectRoot);
-            if (File.Exists(VsCodeLaunchJsonPath))
-            {
-                var existing = File.ReadAllText(VsCodeLaunchJsonPath);
-                if (!existing.Contains("\"type\": \"ariadnets\""))
-                {
-                    return;
-                }
-            }
+            UpsertVsCodeDebugConfig(debugHost, Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535));
+        }
 
-            File.WriteAllText(
-                VsCodeLaunchJsonPath,
-                CreateVsCodeLaunchJson(debugHost, Mathf.Clamp(debugBasePort + debugInstanceId, 1, 65535)),
-                Encoding.UTF8);
+        private void UpsertVsCodeDebugConfig(string host, int port)
+        {
+            var script = Path.Combine(GetPackageRoot(), "Editor", "Tools", "upsert_vscode_launch_config.mjs");
+            var arguments =
+                Quote(script) +
+                " --launch-json " + Quote(VsCodeLaunchJsonPath) +
+                " --host " + Quote(string.IsNullOrWhiteSpace(host) ? "127.0.0.1" : host) +
+                " --port " + Mathf.Clamp(port, 1, 65535).ToString(CultureInfo.InvariantCulture) +
+                " --ts-root " + Quote("${workspaceFolder}/TypeScript") +
+                " --poll-interval-ms 250";
+            var result = RunProcess(nodeExecutable, arguments, ProjectRoot);
+            if (result.ExitCode != 0)
+            {
+                throw new InvalidOperationException(result.CombinedOutput);
+            }
         }
 
         private void ApplyDebugSettings(ScriptRuntimeHost runtimeHost)
@@ -728,6 +709,7 @@ namespace AriadneTS.Editor
             SetInt(runtimeHost, "debugInstanceId", debugInstanceId);
             SetString(runtimeHost, "debugRole", debugRole);
             SetBool(runtimeHost, "waitForDebugger", debugWaitForAttach);
+            SetInt(runtimeHost, "debugStartupGraceMilliseconds", debugStartupGraceMilliseconds);
         }
 
         private bool CanBuild()
@@ -1030,13 +1012,6 @@ namespace AriadneTS.Editor
         private static string Quote(string value)
         {
             return "\"" + value.Replace("\"", "\\\"") + "\"";
-        }
-
-        private static string JsonEscape(string value)
-        {
-            return (value ?? string.Empty)
-                .Replace("\\", "\\\\")
-                .Replace("\"", "\\\"");
         }
 
         private static string FindDefaultNodeExecutable()

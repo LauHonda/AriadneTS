@@ -156,6 +156,10 @@ implementation.
 ./Tools/build_unity_plugins.sh
 ```
 
+`build_unity_plugins.sh` builds locally available Unity native plugins and then
+syncs the shared native headers/libraries into the Unreal plugin through
+`Tools/sync_unreal_native.sh`.
+
 See [Unity deployment](Documentation/unity-deployment.md) and
 [runtime architecture](Documentation/runtime-architecture.md) for details.
 The included bidirectional example is documented in

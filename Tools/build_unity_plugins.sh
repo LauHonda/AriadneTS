@@ -14,4 +14,5 @@ else
 fi
 
 "$ROOT_DIR/Tools/verify_unity_plugins.sh"
+"$ROOT_DIR/Tools/sync_unreal_native.sh"
 echo "Built locally available Unity native plugins"

@@ -53,5 +53,8 @@ public:
     UPROPERTY(Config, EditAnywhere, Category = "Script Debugging")
     bool bWaitForDebugger = false;
 
+    UPROPERTY(Config, EditAnywhere, Category = "Script Debugging", meta = (ClampMin = "0", ClampMax = "5000"))
+    int32 DebugStartupGraceMilliseconds = 1000;
+
     virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 };

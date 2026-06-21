@@ -18,7 +18,7 @@ mkdir -p "$BUILD_DIR" "$PLUGIN_DIR"
     $COMMON_DEFINES $COMMON_INCLUDES \
     -DTSRUNTIME_BUILD_SHARED \
     $QUICKJS_SOURCES "$RUNTIME_SOURCE" \
-    -lm -static -static-libgcc \
+    -lm -lws2_32 -static -static-libgcc \
     -o "$PLUGIN_DIR/ariadnets.dll"
 "${CC%gcc}strip" --strip-unneeded "$PLUGIN_DIR/ariadnets.dll"
 

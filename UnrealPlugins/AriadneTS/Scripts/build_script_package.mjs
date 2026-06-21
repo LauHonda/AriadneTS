@@ -217,6 +217,7 @@ async function instrumentDebugProbes(distDirectory) {
       blockStack: [],
       expressionDepth: 0,
     };
+    const dynamicBreakpointsEnabled = shouldInstrumentDynamicBreakpoints(relativePath);
     let changed = false;
     const instrumented = lines.map((line, index) => {
       const generatedLine = index + 1;
@@ -228,7 +229,7 @@ async function instrumentDebugProbes(distDirectory) {
         generatedLine,
         generatedColumn,
       );
-      const lineProbe = shouldInstrumentDynamicBreakpointLine(line, debugState)
+      const lineProbe = dynamicBreakpointsEnabled && shouldInstrumentDynamicBreakpointLine(line, debugState)
         ? `globalThis.__ariadnets_debug_line(${JSON.stringify(position.source)}, ${position.line}, ${position.column}, ${JSON.stringify(currentDebugFunctionName(debugState))}, ${createDebugVariablesCapture(debugState)}, (new Error()).stack);\n`
         : "";
       updateDebugState(debugState, line);
@@ -256,6 +257,11 @@ async function instrumentDebugProbes(distDirectory) {
       await writeFile(fullPath, instrumented, "utf8");
     }
   }
+}
+
+function shouldInstrumentDynamicBreakpoints(relativePath) {
+  const normalized = relativePath.replaceAll(path.sep, "/");
+  return !normalized.startsWith("ariadnets-sdk/");
 }
 
 function shouldInstrumentDynamicBreakpointLine(line, debugState) {
@@ -320,7 +326,7 @@ function updateDebugState(state, line) {
 }
 
 function createDebugBlockInfo(prefix, isInsideExecutableBlock, parentVariables) {
-  const inheritedVariables = [...parentVariables];
+  const inheritedVariables = uniqueDebugVariables(parentVariables);
   if (isInsideExecutableBlock) {
     return {
       executable: true,
@@ -348,7 +354,7 @@ function createDebugBlockInfo(prefix, isInsideExecutableBlock, parentVariables) 
   return {
     executable,
     functionName: executable ? currentFunctionNameFromPrefix(prefix, "anonymous") : "",
-    variables: executable ? [...inheritedVariables, ...parseDebugParameters(prefix)] : [],
+    variables: executable ? uniqueDebugVariables(["this", ...inheritedVariables, ...parseDebugParameters(prefix)]) : [],
   };
 }
 
@@ -404,14 +410,63 @@ function addDeclaredDebugVariables(state, code) {
   if (variables.length === 0 && !state.blockStack.some((block) => block.executable)) {
     return;
   }
-  const declaration = code.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/);
+  for (const name of parseDeclaredDebugVariables(code)) {
+    if (!variables.includes(name)) {
+      variables.push(name);
+    }
+  }
+}
+
+function parseDeclaredDebugVariables(code) {
+  const declaration = code.match(/\b(?:const|let|var)\s+(.+?)(?:;|$)/);
   if (!declaration) {
-    return;
+    return [];
   }
-  const name = declaration[1];
-  if (!variables.includes(name)) {
-    variables.push(name);
+  const names = [];
+  for (const part of splitTopLevelCommaList(declaration[1])) {
+    const match = part.trim().match(/^([A-Za-z_$][\w$]*)\b/);
+    if (match) {
+      names.push(match[1]);
+    }
   }
+  return names;
+}
+
+function splitTopLevelCommaList(text) {
+  const parts = [];
+  let start = 0;
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < text.length; ++index) {
+    const character = text[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") {
+      quote = character;
+    } else if (character === "(" || character === "[" || character === "{") {
+      ++depth;
+    } else if (character === ")" || character === "]" || character === "}") {
+      depth = Math.max(0, depth - 1);
+    } else if (character === "," && depth === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function uniqueDebugVariables(variables) {
+  return [...new Set(variables.filter((name) => typeof name === "string" && name.length > 0))];
 }
 
 function createDebugVariablesCapture(state) {
@@ -422,7 +477,7 @@ function createDebugVariablesCapture(state) {
   const assignments = variables.map((name) =>
     `try{__s(${JSON.stringify(name)},${name});}catch{__v[${JSON.stringify(name)}]="<unavailable>";}`,
   ).join("");
-  return `(()=>{const __v={};const __s=(n,v)=>{try{__v[n]=v===null||typeof v!=="object"?v:String(v);}catch{__v[n]="<unavailable>";}};${assignments}return __v;})()`;
+  return `(()=>{const __v={};const __seen=[];const __p=(v)=>{const t=typeof v;if(t==="undefined")return "<undefined>";if(t==="bigint")return v.toString()+"n";if(t==="symbol")return String(v);if(t==="function")return "[Function"+(v.name?" "+v.name:"")+"]";return v;};const __c=(v,d)=>{try{v=__p(v);if(v===null||typeof v!=="object")return v;if(d<=0)return Array.isArray(v)?"Array":"Object";if(__seen.indexOf(v)>=0)return "<circular>";__seen.push(v);if(Array.isArray(v)){const a=[];for(let i=0;i<Math.min(v.length,32);++i)a.push(__c(v[i],d-1));if(v.length>32)a.push("...");return a;}const o={};let n=0;for(const k of Object.keys(v)){if(n++>=32){o["..."]="...";break;}o[k]=__c(v[k],d-1);}return o;}catch{return "<unavailable>";}};const __s=(n,v)=>{__v[n]=__c(v,2);};${assignments}return __v;})()`;
 }
 
 function stripLineStringsAndComments(line) {

@@ -8,6 +8,7 @@ Engine 5.0+ and mirrors the Unity package shape:
 - host method bridge
 - Unreal-side Actor and Component bridge
 - editor menu entries for TypeScript workspace initialization and package build
+- bundled native libraries for Win64, Mac, Android, and iOS
 
 ## Install
 
@@ -51,6 +52,19 @@ Windows projects:
 The editor tools are intended to be the normal setup path for developers. A
 developer should not need the AriadneTS source repository after the plugin is
 copied into an Unreal project.
+
+## Native Runtime Synchronization
+
+The Unreal plugin consumes the same engine-independent native ABI as Unity.
+When the native runtime or Unity native plugin binaries are rebuilt from the
+repository, run:
+
+```sh
+./Tools/sync_unreal_native.sh
+```
+
+This copies the current native headers and platform libraries into
+`Source/ThirdParty/AriadneTSNative`.
 
 ## Runtime Actor
 

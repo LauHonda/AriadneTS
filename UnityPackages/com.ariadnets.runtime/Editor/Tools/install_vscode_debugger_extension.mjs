@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,14 +7,17 @@ import { fileURLToPath } from "node:url";
 const toolsDirectory = path.dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = path.join(toolsDirectory, "vscode-ariadnets-debugger");
 const extensionDirectory = resolveExtensionDirectory();
-const destinationDirectory = path.join(extensionDirectory, "ariadnets.ariadnets-debugger-0.1.0");
 
 if (!existsSync(path.join(sourceDirectory, "package.json"))) {
   throw new Error(`AriadneTS VSCode debugger extension is missing: ${sourceDirectory}`);
 }
 
+const packageJson = JSON.parse(await readFile(path.join(sourceDirectory, "package.json"), "utf8"));
+const extensionVersion = packageJson.version ?? "0.0.0";
+const destinationDirectory = path.join(extensionDirectory, `ariadnets.ariadnets-debugger-${extensionVersion}`);
+
 await mkdir(extensionDirectory, { recursive: true });
-await rm(destinationDirectory, { recursive: true, force: true });
+await removeInstalledAriadneTsDebuggerVersions(extensionDirectory, path.basename(destinationDirectory));
 await cp(sourceDirectory, destinationDirectory, {
   recursive: true,
   filter: (source) => !source.endsWith(".meta"),
@@ -31,6 +34,22 @@ function resolveExtensionDirectory() {
     return process.env.VSCODE_EXTENSIONS;
   }
   return path.join(os.homedir(), ".vscode", "extensions");
+}
+
+async function removeInstalledAriadneTsDebuggerVersions(extensionDirectory, keepFolderName) {
+  for (const entry of await readdir(extensionDirectory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (!entry.name.startsWith("ariadnets.ariadnets-debugger-")) {
+      continue;
+    }
+    if (entry.name === keepFolderName) {
+      await rm(path.join(extensionDirectory, entry.name), { recursive: true, force: true });
+      continue;
+    }
+    await rm(path.join(extensionDirectory, entry.name), { recursive: true, force: true });
+  }
 }
 
 async function removeObsoleteMarker(extensionDirectory, extensionFolderName) {
@@ -74,7 +93,7 @@ async function updateExtensionsIndex(extensionDirectory, destinationDirectory) {
     identifier: {
       id: identifier,
     },
-    version: "0.1.0",
+    version: extensionVersion,
     location: {
       $mid: 1,
       path: destinationDirectory,

@@ -3,6 +3,7 @@
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Serialization/JsonReader.h"
@@ -93,6 +94,11 @@ bool AAriadneTSRuntimeHost::StartPackage(FString& OutError)
     {
         OutError = TEXT("AriadneTS package entry module is missing.");
         return false;
+    }
+
+    if (bEnableScriptDebugging && !bWaitForDebugger && DebugStartupGraceMilliseconds > 0)
+    {
+        FPlatformProcess::Sleep(FMath::Min(DebugStartupGraceMilliseconds, 5000) / 1000.0f);
     }
 
     if (!Runtime.EvaluateModule(EntrySource, ActivePackage.Manifest.EntryModule, OutError))

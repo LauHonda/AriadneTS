@@ -76,7 +76,9 @@ for ASN.1 SubjectPublicKeyInfo parsing.
 - The JSON host bridge is synchronous and must run on the runtime owner thread.
 - JSON invocation is a correctness and low-frequency business path, not the
   final high-frequency binding path.
-- Source maps are emitted but runtime stack trace remapping is not implemented.
+- Debug probes use source maps to report paused TypeScript locations. Rich
+  object inspection and watch expression evaluation are still future debugger
+  work.
 - Linux and WebGL native plugins are not built.
 - Final plugin import behavior and cryptography support must be verified in the
   actual Unity Editor and IL2CPP players.

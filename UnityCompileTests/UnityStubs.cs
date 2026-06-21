@@ -143,6 +143,7 @@ namespace UnityEngine
 
     public static class Application
     {
+        public static bool runInBackground { get; set; }
         public static bool isEditor => true;
         public static string persistentDataPath => ".";
     }

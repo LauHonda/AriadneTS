@@ -75,9 +75,11 @@ struct ts_runtime {
     volatile int debug_client_attached;
     volatile uint32_t debug_continue_counter;
     volatile int debug_pause_active;
+    volatile uint32_t debug_pause_sequence;
     volatile int debug_step_requested;
     volatile int debug_step_mode;
     int32_t debug_step_target_stack_depth;
+    uint32_t debug_paused_id;
     char* debug_paused_module;
     char* debug_paused_function;
     char* debug_paused_variables_json;
@@ -191,6 +193,7 @@ static void clear_debug_pause_location(ts_runtime* runtime) {
     runtime->debug_paused_variables_json = NULL;
     runtime->debug_paused_stack = NULL;
     runtime->debug_paused_stack_depth = 0;
+    runtime->debug_paused_id = 0;
     runtime->debug_paused_line = 0;
     runtime->debug_paused_column = 0;
 }
@@ -561,8 +564,9 @@ static void debug_send_status(ts_runtime* runtime, ts_socket client) {
     snprintf(
         response,
         sizeof(response),
-        "{\"state\":\"%s\",\"module\":\"%s\",\"function\":\"%s\",\"line\":%d,\"column\":%d}\n",
+        "{\"state\":\"%s\",\"pauseId\":%u,\"module\":\"%s\",\"function\":\"%s\",\"line\":%d,\"column\":%d}\n",
         runtime != NULL && runtime->debug_pause_active ? "paused" : "running",
+        runtime != NULL && runtime->debug_pause_active ? runtime->debug_paused_id : 0u,
         module_name,
         function_name,
         runtime != NULL ? runtime->debug_paused_line : 0,
@@ -824,8 +828,7 @@ static int debug_bind_socket(ts_runtime* runtime) {
 static void debug_accept_loop(ts_runtime* runtime) {
     static const char greeting[] =
         "AriadneTS debug endpoint connected.\n"
-        "Commands: status, continue, break <file>:<line>, clear <file>:<line>, breakpoints\n"
-        "Native breakpoint protocol is not implemented yet.\n";
+        "Commands: status, continue, step, next, stepIn, stepOut, variables, stack, break <file>:<line>, clear <file>:<line>, breakpoints\n";
 
     while (runtime != NULL && !runtime->debug_stop_requested) {
         ts_socket client = accept(runtime->debug_listen_socket, NULL, NULL);
@@ -1214,6 +1217,7 @@ static void debug_pause_at(
     runtime->debug_paused_variables_json = duplicate_c_string(variables_json != NULL ? variables_json : "{}");
     runtime->debug_paused_stack = duplicate_c_string(stack != NULL ? stack : "");
     runtime->debug_paused_stack_depth = debug_stack_depth(stack);
+    runtime->debug_paused_id = ++runtime->debug_pause_sequence;
     runtime->debug_paused_line = line;
     runtime->debug_paused_column = column;
     runtime->debug_pause_active = 1;

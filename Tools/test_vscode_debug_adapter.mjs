@@ -20,8 +20,7 @@ const server = net.createServer((socket) => {
   socket.setEncoding("utf8");
   socket.write(
     "AriadneTS debug endpoint connected.\n" +
-    "Commands: status, continue, break <file>:<line>, clear <file>:<line>, breakpoints\n" +
-    "Native breakpoint protocol is not implemented yet.\n",
+    "Commands: status, continue, step, next, stepIn, stepOut, variables, stack, break <file>:<line>, clear <file>:<line>, breakpoints\n",
   );
   socket.on("data", (chunk) => {
     const command = JSON.parse(chunk.trim());
@@ -142,6 +141,21 @@ try {
     "adapter did not forward setBreakpoint",
   );
 
+  sendRequest("stepIn", { threadId: 1 });
+  const stepIn = await waitForResponse("stepIn");
+  assert(stepIn.success, "stepIn failed");
+  sendRequest("stepOut", { threadId: 1 });
+  const stepOut = await waitForResponse("stepOut");
+  assert(stepOut.success, "stepOut failed");
+  assert(
+    receivedRuntimeCommands.some((command) => command.command === "stepIn"),
+    "adapter did not forward stepIn",
+  );
+  assert(
+    receivedRuntimeCommands.some((command) => command.command === "stepOut"),
+    "adapter did not forward stepOut",
+  );
+
   sendRequest("disconnect", {});
   const disconnect = await waitForResponse("disconnect");
   assert(disconnect.success, "disconnect failed");
@@ -151,6 +165,7 @@ try {
 }
 
 await testRealRuntimeBreakpoint();
+await testSourceMappedStackFrames();
 console.log("vscode debug adapter smoke test passed");
 
 function assert(condition, message) {
@@ -228,13 +243,56 @@ async function testRealRuntimeBreakpoint() {
 
       dap.sendRequest("scopes", { frameId: 1 });
       const scopes = await dap.waitForResponse("scopes");
-      const localsReference = scopes.body?.scopes?.[0]?.variablesReference;
+      const scopeItems = scopes.body?.scopes ?? [];
+      const localsScope = scopeItems.find((item) => item.name === "Locals");
+      const runtimeScope = scopeItems.find((item) => item.name === "AriadneTS Runtime");
+      const localsReference = localsScope?.variablesReference;
+      const runtimeReference = runtimeScope?.variablesReference;
       assert(localsReference > 0, "locals scope reference missing");
+      assert(runtimeReference > 0, "runtime scope reference missing");
       dap.sendRequest("variables", { variablesReference: localsReference });
       const variables = await dap.waitForResponse("variables");
+      const payloadVariable = variables.body?.variables?.find((item) => item.name === "payload");
+      const variableItems = variables.body?.variables ?? [];
       assert(
-        variables.body?.variables?.some((item) => item.name === "payload" && item.value === "Object"),
+        payloadVariable?.value === "Object" && payloadVariable.variablesReference > 0,
         "payload local variable missing",
+      );
+      assert(variableItems.some((item) => item.name === "missing" && item.value === "<undefined>"), "undefined snapshot missing");
+      assert(variableItems.some((item) => item.name === "callback" && item.value === "[Function tick]"), "function snapshot missing");
+      assert(variableItems.some((item) => item.name === "big" && item.value === "9007199254740993n"), "bigint snapshot missing");
+      assert(variableItems.some((item) => item.name === "token" && item.value === "Symbol(token)"), "symbol snapshot missing");
+      assert(
+        variableItems.some((item) => item.name === "circular" && item.value === "Object" && item.variablesReference > 0),
+        "circular object snapshot missing",
+      );
+      dap.sendRequest("variables", { variablesReference: payloadVariable.variablesReference });
+      const payloadFields = await dap.waitForResponse("variables");
+      assert(
+        payloadFields.body?.variables?.some((item) => item.name === "deltaTime" && item.value === "1.25"),
+        "payload.deltaTime field missing",
+      );
+
+      dap.sendRequest("variables", { variablesReference: runtimeReference });
+      const runtimeVariables = await dap.waitForResponse("variables");
+      const runtimeItems = runtimeVariables.body?.variables ?? [];
+      assert(runtimeItems.some((item) => item.name === "state" && item.value === "paused"), "runtime state missing");
+      assert(runtimeItems.some((item) => item.name === "function" && item.value === "onTick"), "runtime function missing");
+      assert(runtimeItems.some((item) => item.name === "line" && item.value === "87"), "runtime line missing");
+      assert(runtimeItems.some((item) => item.name === "endpoint" && item.value === `127.0.0.1:${runtimePort}`), "runtime endpoint missing");
+
+      dap.sendRequest("evaluate", { expression: "payload.deltaTime", frameId: 1, context: "watch" });
+      const evaluatedPayload = await dap.waitForResponse("evaluate");
+      assert(
+        evaluatedPayload.body?.result === "1.25",
+        `payload.deltaTime evaluation did not match: ${evaluatedPayload.body?.result}`,
+      );
+
+      dap.sendRequest("evaluate", { expression: "$runtime.function", frameId: 1, context: "watch" });
+      const evaluatedRuntime = await dap.waitForResponse("evaluate");
+      assert(
+        evaluatedRuntime.body?.result === "onTick",
+        `runtime function evaluation did not match: ${evaluatedRuntime.body?.result}`,
       );
 
       dap.sendRequest("next", { threadId: 1 });
@@ -253,6 +311,64 @@ async function testRealRuntimeBreakpoint() {
     }
   } finally {
     runtime.kill();
+  }
+}
+
+async function testSourceMappedStackFrames() {
+  const sourceMapPort = 49392;
+  const server = net.createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.write(
+      "AriadneTS debug endpoint connected.\n" +
+      "Commands: status, continue, step, next, stepIn, stepOut, variables, stack, break <file>:<line>, clear <file>:<line>, breakpoints\n",
+    );
+    socket.on("data", (chunk) => {
+      const command = JSON.parse(chunk.trim());
+      if (command.command === "listBreakpoints") {
+        socket.end("{\"breakpoints\":[]}\n");
+      } else if (command.command === "status") {
+        socket.end("{\"state\":\"paused\",\"pauseId\":1,\"module\":\"src/game-application.ts\",\"function\":\"onTick\",\"line\":87,\"column\":4}\n");
+      } else if (command.command === "stack") {
+        socket.end("{\"stack\":\"at debugProbe (src/bootstrap.js:20:7)\\nat GameApplication.onTick (src/game-application.js:70:9)\"}\n");
+      } else if (command.command === "variables") {
+        socket.end("{\"variables\":{\"payload\":{\"deltaTime\":1.25}}}\n");
+      } else {
+        socket.end("{\"ok\":true}\n");
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(sourceMapPort, "127.0.0.1", resolve));
+
+  const sourceMapAdapter = spawn(process.execPath, [adapterPath], {
+    cwd: root,
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  const dap = createDapHarness(sourceMapAdapter);
+  try {
+    dap.sendRequest("initialize", {});
+    assert((await dap.waitForResponse("initialize")).success, "source-map initialize failed");
+    await dap.waitForEvent("initialized");
+
+    dap.sendRequest("attach", {
+      host: "127.0.0.1",
+      port: sourceMapPort,
+      tsRoot: path.join(root, "UnityProject", "TypeScript"),
+      pollIntervalMs: 50,
+    });
+    assert((await dap.waitForResponse("attach")).success, "source-map attach failed");
+    await dap.waitForEvent("stopped", 5000);
+
+    dap.sendRequest("stackTrace", { threadId: 1 });
+    const stackTrace = await dap.waitForResponse("stackTrace");
+    const frames = stackTrace.body?.stackFrames ?? [];
+    assert(frames.length >= 2, "source-mapped stack should include multiple frames");
+    assert(
+      frames[1]?.source?.path?.endsWith("UnityProject/TypeScript/src/game-application.ts"),
+      `generated JS frame did not map to TypeScript: ${frames[1]?.source?.path}`,
+    );
+  } finally {
+    sourceMapAdapter.kill();
+    server.close();
   }
 }
 

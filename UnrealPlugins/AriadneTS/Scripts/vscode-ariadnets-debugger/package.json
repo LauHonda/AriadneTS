@@ -2,7 +2,7 @@
   "name": "ariadnets-debugger",
   "displayName": "AriadneTS Debugger",
   "description": "VSCode debug adapter for AriadneTS Unity and Unreal script runtimes.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "ariadnets",
   "engines": {
     "vscode": "^1.70.0"

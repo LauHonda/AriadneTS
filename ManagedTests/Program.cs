@@ -325,7 +325,8 @@ internal static class Program
 
         runtime.Evaluate(
             "const payload = { deltaTime: 1.25 };" +
-            "globalThis.__ariadnets_debug_line('src/game-application.ts', 87, 4, 'onTick', { payload });" +
+            "const circular = { name: 'loop' }; circular.self = '<circular>';" +
+            "globalThis.__ariadnets_debug_line('src/game-application.ts', 87, 4, 'onTick', { payload, missing: '<undefined>', callback: '[Function tick]', big: '9007199254740993n', token: 'Symbol(token)', circular });" +
             "host.log('after first stop');" +
             "globalThis.__ariadnets_debug_line('src/game-application.ts', 88, 4, 'onTick', { payload });" +
             "host.log('after dap continue');",

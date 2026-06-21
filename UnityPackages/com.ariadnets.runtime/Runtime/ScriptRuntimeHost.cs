@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading;
 using UnityEngine;
 
 namespace AriadneTS.Runtime
@@ -93,6 +94,9 @@ namespace AriadneTS.Runtime
         [SerializeField]
         private bool waitForDebugger = false;
 
+        [SerializeField]
+        private int debugStartupGraceMilliseconds = 1000;
+
         private ScriptRuntime runtime;
         private Func<string, string> moduleLoader;
         private ScriptPackageManifest activeManifest;
@@ -108,6 +112,7 @@ namespace AriadneTS.Runtime
         public int DebugInstanceId => debugInstanceId;
         public string DebugRole => debugRole;
         public bool WaitForDebugger => waitForDebugger;
+        public int DebugStartupGraceMilliseconds => debugStartupGraceMilliseconds;
         public int DebugPort => ComputeDebugPort(debugBasePort, debugInstanceId);
 
         public void RegisterHostHandler(string method, Func<string, string> handler)
@@ -240,6 +245,7 @@ namespace AriadneTS.Runtime
                 waitForDebugger);
             try
             {
+                WaitForDebugStartupGrace();
                 runtime.EvaluateModule(entrySource, entryModule);
                 InvokeRuntimeWithFallback("onBeginPlay", "start");
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
@@ -441,7 +447,19 @@ namespace AriadneTS.Runtime
                 (string.IsNullOrWhiteSpace(debugRole) ? "Client" : debugRole) +
                 " waitForDebugger=" +
                 waitForDebugger.ToString(CultureInfo.InvariantCulture) +
+                " startupGraceMs=" +
+                DebugStartupGraceMilliseconds.ToString(CultureInfo.InvariantCulture) +
                 ". A TCP debug endpoint will listen on this address and accepts AriadneTS breakpoint commands.");
+        }
+
+        private void WaitForDebugStartupGrace()
+        {
+            if (!enableScriptDebugging || waitForDebugger || debugStartupGraceMilliseconds <= 0)
+            {
+                return;
+            }
+
+            Thread.Sleep(Math.Min(debugStartupGraceMilliseconds, 5000));
         }
 
         private void ReportPackageConfiguration()

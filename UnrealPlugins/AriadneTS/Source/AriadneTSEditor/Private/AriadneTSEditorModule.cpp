@@ -182,7 +182,6 @@ void FAriadneTSEditorModule::CreateVsCodeDebugConfig()
     const UAriadneTSEditorSettings* Settings = GetDefault<UAriadneTSEditorSettings>();
     const FString VscodeDirectory = FPaths::Combine(FPaths::ProjectDir(), TEXT(".vscode"));
     const FString LaunchJsonPath = FPaths::Combine(VscodeDirectory, TEXT("launch.json"));
-    IFileManager::Get().MakeDirectory(*VscodeDirectory, true);
 
     const int32 Port = FMath::Clamp(Settings->DebugBasePort + Settings->DebugInstanceId, 1, 65535);
     const FString TypeScriptRoot = ResolveConfiguredPath(Settings->TypeScriptRoot);
@@ -194,32 +193,26 @@ void FAriadneTSEditorModule::CreateVsCodeDebugConfig()
         RelativeTypeScriptRoot = TEXT("TypeScript");
     }
 
-    const FString LaunchJson = FString::Printf(
-        TEXT("{\n")
-        TEXT("  \"version\": \"0.2.0\",\n")
-        TEXT("  \"configurations\": [\n")
-        TEXT("    {\n")
-        TEXT("      \"type\": \"ariadnets\",\n")
-        TEXT("      \"request\": \"attach\",\n")
-        TEXT("      \"name\": \"Attach AriadneTS\",\n")
-        TEXT("      \"host\": \"%s\",\n")
-        TEXT("      \"port\": %d,\n")
-        TEXT("      \"tsRoot\": \"${workspaceFolder}/%s\",\n")
-        TEXT("      \"pollIntervalMs\": 250\n")
-        TEXT("    }\n")
-        TEXT("  ]\n")
-        TEXT("}\n"),
+    const FString ScriptPath = FPaths::ConvertRelativePathToFull(
+        FPaths::Combine(PluginBaseDir(), TEXT("Scripts/upsert_vscode_launch_config.mjs")));
+    const FString Args = FString::Printf(
+        TEXT("--launch-json \"%s\" --host \"%s\" --port %d --ts-root \"${workspaceFolder}/%s\" --poll-interval-ms 250"),
+        *LaunchJsonPath,
         *Settings->DebugHost.Replace(TEXT("\\"), TEXT("\\\\")).Replace(TEXT("\""), TEXT("\\\"")),
         Port,
         *RelativeTypeScriptRoot.Replace(TEXT("\\"), TEXT("/")).Replace(TEXT("\""), TEXT("\\\"")));
 
-    if (FFileHelper::SaveStringToFile(LaunchJson, *LaunchJsonPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+    int32 ReturnCode = 0;
+    FString StdOut;
+    FString StdErr;
+    if (RunNodeScript(ScriptPath, Args, StdOut, StdErr, ReturnCode) && ReturnCode == 0)
     {
         Notify(LOCTEXT("AriadneTSVsCodeConfigCreated", "AriadneTS VSCode launch.json created or updated."));
     }
     else
     {
         Notify(LOCTEXT("AriadneTSVsCodeConfigFailed", "Failed to write AriadneTS VSCode launch.json."), 8.0f);
+        UE_LOG(LogTemp, Error, TEXT("AriadneTS VSCode launch config update failed: %s\n%s"), *StdOut, *StdErr);
     }
 }
 
@@ -258,6 +251,7 @@ void FAriadneTSEditorModule::CreateRuntimeHost()
     Host->DebugInstanceId = Settings->DebugInstanceId;
     Host->DebugRole = Settings->DebugRole;
     Host->bWaitForDebugger = Settings->bWaitForDebugger;
+    Host->DebugStartupGraceMilliseconds = Settings->DebugStartupGraceMilliseconds;
 
     GEditor->SelectNone(false, true);
     GEditor->SelectActor(Host, true, true);
