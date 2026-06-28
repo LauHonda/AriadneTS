@@ -41,14 +41,23 @@ public key. The public key changes only when the private key changes.
 
 The UPM package includes **Tools > AriadneTS > Script Tools**.
 
-1. Click **Initialize TypeScript Project** to create `TypeScript/` at the Unity
-   project root. Existing folders are never overwritten.
-2. Select a private key PEM.
-3. Select an output path, for example
+1. In **Environment Setup**, click **Select Node.js Version** and choose the
+   recommended LTS release, then click **Install/Change Project Node.js Toolchain** to
+   download Node.js into `AriadneTS/Toolchain/node/` at the Unity project root.
+2. In **Environment Setup**, click **Initialize TypeScript Project** to create
+   `TypeScript/` at the Unity project root. Existing folders are never
+   overwritten.
+3. In **Environment Setup**, click **Diagnose TypeScript Environment** to check
+   Node/npm and local compiler state.
+4. In **Environment Setup**, click **Install Local TypeScript Compiler** to run
+   `npm install` for the generated TypeScript workspace when the local compiler
+   is missing.
+5. In **Package Signing And Build**, select or generate a private key PEM.
+6. In **Package Signing And Build**, select an output path, for example
    `Assets/TypeScript/typescript-package.bytes`.
-4. Click **Compile TypeScript And Build Package**.
-5. Copy the displayed public key into
-   `ScriptPackageRuntimeController.packageSigningPublicKey`.
+7. Click **Compile TypeScript And Build Package**.
+8. In **Runtime And Debugging**, click **Create Or Update Runtime Host In
+   Scene** to fill the runtime components, package asset, and public key.
 
 ## Deploy Runtime Into Unity
 

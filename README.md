@@ -83,8 +83,11 @@ UnityPackages/com.ariadnets.runtime/package.json
 
 ### 2. Build A Signed Script Package
 
-Inside Unity, open **Tools > AriadneTS > Script Tools** to initialize a
-`TypeScript/` folder and build a signed package.
+Inside Unity, open **Tools > AriadneTS > Script Tools**. Use **Environment
+Setup** to install the project Node.js toolchain, diagnose Node/npm, initialize
+the `TypeScript/` folder, install the local TypeScript compiler, and create
+VSCode config, then use
+**Package Signing And Build** to create a signed package.
 
 From the command line:
 
@@ -130,9 +133,11 @@ UnrealPlugins/AriadneTS -> YourProject/Plugins/AriadneTS
 ```
 
 Then regenerate project files and enable the plugin in Unreal Editor. Configure
-defaults in **Project Settings > Plugins > AriadneTS**, then use
-`Tools > AriadneTS` to initialize TypeScript, generate keys, build packages,
-install the VSCode debugger, create launch config, and create a runtime host.
+defaults in **Project Settings > Plugins > AriadneTS**, then use the AriadneTS
+Tools menu groups for **Environment Setup**, **Package Signing And Build**, and
+**Runtime And Debugging** to initialize TypeScript, generate keys, build
+packages, diagnose Node/npm, install the local TypeScript compiler and the
+VSCode debugger, create launch config, and create a runtime host.
 
 ## TypeScript Lifecycle
 

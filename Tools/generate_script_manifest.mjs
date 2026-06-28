@@ -8,7 +8,7 @@ const rootDirectory = path.resolve(toolsDirectory, "..");
 const distDirectory = path.join(rootDirectory, "TypeScript", "dist");
 const version = process.argv[2] ?? "local-dev";
 const buildNumber = Number.parseInt(process.env.SCRIPT_PACKAGE_BUILD_NUMBER ?? "0", 10);
-const requiredRuntimeAbiVersion = 4;
+const requiredRuntimeAbiVersion = 5;
 const entryModule = "bootstrap.js";
 
 if (!Number.isSafeInteger(buildNumber) || buildNumber < 0) {

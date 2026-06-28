@@ -1,10 +1,20 @@
 # AriadneTS VSCode Debugger
 
 This folder contains the VSCode Debug Adapter for AriadneTS business script debugging.
+Version `0.1.0` is the first developer-facing release.
 
 It attaches to the AriadneTS runtime debug endpoint, maps VSCode breakpoints to
 the runtime JSON commands, polls runtime status, and reports paused script
 locations back to VSCode.
+
+Breakpoint binding uses `TypeScript/dist/debug-metadata.json` when available.
+That file is generated into the signed script package, so the adapter resolves
+breakpoints from the same probe table that the engine runtime executes. If the
+metadata is missing, the adapter falls back to scanning generated JavaScript.
+
+Breakpoints are synchronized only when they change or when the runtime
+reconnects. Status polling does not repeatedly clear and recreate unchanged
+breakpoints.
 
 Current capabilities:
 
@@ -26,6 +36,9 @@ Not implemented yet:
 - live object references or native memory inspection
 - conditional and exception breakpoints
 - automatic Unity or Unreal process launch
+
+Protocol tracing is disabled by default. Set `tracePath` in the AriadneTS
+launch configuration only when diagnosing adapter protocol behavior.
 
 ## Run Locally
 

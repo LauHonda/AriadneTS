@@ -2,7 +2,9 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using AriadneTS.Runtime;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -17,7 +19,10 @@ namespace AriadneTS.Editor
         private const string BuildNumberKey = "AriadneTS.ScriptTools.BuildNumber";
         private const string PrivateKeyKey = "AriadneTS.ScriptTools.PrivateKey";
         private const string OutputPathKey = "AriadneTS.ScriptTools.OutputPath";
-        private const string NodePathKey = "AriadneTS.ScriptTools.NodePath";
+        private const string DefaultNodeVersion = "22.13.1";
+        private const string NodeVersionKey = "AriadneTS.ScriptTools.NodeVersion";
+        private const string NodeDistributionIndexUrl = "https://nodejs.org/dist/index.json";
+        private const int MaxNodeVersionMenuItems = 80;
         private const string DebugEnabledKey = "AriadneTS.ScriptTools.Debug.Enabled";
         private const string DebugProtocolKey = "AriadneTS.ScriptTools.Debug.Protocol";
         private const string DebugHostKey = "AriadneTS.ScriptTools.Debug.Host";
@@ -33,7 +38,9 @@ namespace AriadneTS.Editor
         private int buildNumber;
         private string privateKeyPath;
         private string outputPackagePath;
+        private string nodeVersion;
         private string nodeExecutable;
+        private string npmExecutable;
         private string publicKey;
         private string buildLog;
         private Vector2 scroll;
@@ -61,6 +68,19 @@ namespace AriadneTS.Editor
         private static string VsCodeLaunchJsonPath =>
             Path.Combine(ProjectRoot, ".vscode", "launch.json");
 
+        private static string DefaultProjectNodeExecutable =>
+            Application.platform == RuntimePlatform.WindowsEditor
+                ? Path.Combine(ProjectRoot, "AriadneTS", "Toolchain", "node", "node.exe")
+                : Path.Combine(ProjectRoot, "AriadneTS", "Toolchain", "node", "bin", "node");
+
+        private static string DefaultProjectNpmExecutable =>
+            Application.platform == RuntimePlatform.WindowsEditor
+                ? Path.Combine(ProjectRoot, "AriadneTS", "Toolchain", "node", "npm.cmd")
+                : Path.Combine(ProjectRoot, "AriadneTS", "Toolchain", "node", "bin", "npm");
+
+        private static string ProjectToolchainNodeRoot =>
+            Path.Combine(ProjectRoot, "AriadneTS", "Toolchain", "node");
+
         [MenuItem("Tools/AriadneTS/Script Tools")]
         public static void Open()
         {
@@ -72,13 +92,15 @@ namespace AriadneTS.Editor
             version = EditorPrefs.GetString(VersionKey, "0.2.0");
             buildNumber = EditorPrefs.GetInt(BuildNumberKey, 1);
             privateKeyPath = EditorPrefs.GetString(PrivateKeyKey, string.Empty);
+            nodeVersion = EditorPrefs.GetString(NodeVersionKey, DefaultNodeVersion);
             outputPackagePath = EditorPrefs.GetString(OutputPathKey, DefaultOutputPackagePath);
             if (Path.GetFullPath(outputPackagePath) == Path.GetFullPath(LegacyDefaultOutputPackagePath))
             {
                 outputPackagePath = DefaultOutputPackagePath;
                 EditorPrefs.SetString(OutputPathKey, outputPackagePath);
             }
-            nodeExecutable = EditorPrefs.GetString(NodePathKey, FindDefaultNodeExecutable());
+            nodeExecutable = DefaultProjectNodeExecutable;
+            npmExecutable = DefaultProjectNpmExecutable;
             debugEnabled = EditorPrefs.GetBool(DebugEnabledKey, false);
             debugProtocol = (ScriptDebugProtocol)EditorPrefs.GetInt(DebugProtocolKey, (int)ScriptDebugProtocol.ChromeDevTools);
             debugHost = EditorPrefs.GetString(DebugHostKey, "127.0.0.1");
@@ -102,17 +124,11 @@ namespace AriadneTS.Editor
                 EditorGUILayout.BeginVertical(GUILayout.Width(contentWidth));
                 verticalStarted = true;
 
-                DrawProjectSection(contentWidth);
-                EditorGUILayout.Space(12);
                 DrawEnvironmentSection(contentWidth);
                 EditorGUILayout.Space(12);
                 DrawBuildSection(contentWidth);
                 EditorGUILayout.Space(12);
-                DrawDebugSection(contentWidth);
-                EditorGUILayout.Space(12);
-                DrawSceneSection(contentWidth);
-                EditorGUILayout.Space(12);
-                DrawPublicKeySection(contentWidth);
+                DrawRuntimeSection();
                 EditorGUILayout.Space(12);
                 DrawLogSection(contentWidth);
             }
@@ -149,21 +165,45 @@ namespace AriadneTS.Editor
             Repaint();
         }
 
-        private void DrawProjectSection(float contentWidth)
+        private void DrawEnvironmentSection(float contentWidth)
         {
-            EditorGUILayout.LabelField("Initialization", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Environment Setup", EditorStyles.boldLabel);
             DrawReadOnlyPath("Unity Project Root", ProjectRoot, contentWidth);
             DrawReadOnlyPath("TypeScript Root", TypeScriptRoot, contentWidth);
 
             var hasDirectory = Directory.Exists(TypeScriptRoot);
             var initialized = IsTypeScriptProjectInitialized();
-            EditorGUILayout.LabelField(
-                "Status",
-                initialized ? "Initialized" : hasDirectory ? "Incomplete" : "Not Initialized");
+            DrawStatus("Node", File.Exists(nodeExecutable), string.IsNullOrWhiteSpace(nodeExecutable)
+                ? "Not found"
+                : nodeExecutable);
+            DrawStatus("Target Node Version", true, NormalizeNodeVersion(nodeVersion));
+            DrawStatus("npm", HasUsableNpm(), NpmStatusText());
+            DrawStatus("TypeScript Project", initialized, initialized
+                ? TypeScriptRoot
+                : hasDirectory ? "Incomplete: " + TypeScriptRoot : TypeScriptRoot);
+            DrawStatus("Local TypeScript Compiler", AreTypeScriptDependenciesInstalled(), TypeScriptDependenciesStatusText());
+            DrawStatus("VSCode Debug Config", IsVsCodeDebugConfigInitialized(), VsCodeLaunchJsonPath);
+
+            DrawReadOnlyPath("Project Node Executable", nodeExecutable, contentWidth);
+            DrawReadOnlyPath("Project npm Executable", npmExecutable, contentWidth);
+            EditorGUILayout.LabelField("Target Node Version", "v" + NormalizeNodeVersion(nodeVersion));
+            if (GUILayout.Button("Select Node.js Version"))
+            {
+                ShowNodeVersionMenu();
+            }
+
             if (GUILayout.Button("Refresh State"))
             {
                 AssetDatabase.Refresh();
                 Repaint();
+            }
+            if (GUILayout.Button("Install/Change Project Node.js Toolchain"))
+            {
+                InstallProjectNodeToolchain();
+            }
+            if (GUILayout.Button("Diagnose TypeScript Environment"))
+            {
+                DiagnoseTypeScriptEnvironment();
             }
             using (new EditorGUI.DisabledScope(initialized))
             {
@@ -175,6 +215,20 @@ namespace AriadneTS.Editor
                 if (GUILayout.Button(buttonText))
                 {
                     InitializeTypeScriptProject();
+                }
+            }
+            using (new EditorGUI.DisabledScope(!File.Exists(nodeExecutable) || !HasUsableNpm() || !File.Exists(Path.Combine(TypeScriptRoot, "package.json"))))
+            {
+                if (GUILayout.Button("Install Local TypeScript Compiler"))
+                {
+                    InstallTypeScriptDependencies();
+                }
+            }
+            using (new EditorGUI.DisabledScope(!File.Exists(nodeExecutable)))
+            {
+                if (GUILayout.Button("Install VSCode AriadneTS Debugger And Config"))
+                {
+                    InstallVsCodeDebuggerExtension();
                 }
             }
 
@@ -190,17 +244,14 @@ namespace AriadneTS.Editor
                     "Initialization creates or repairs editable default scripts under <UnityProject>/TypeScript/src without overwriting existing files.",
                     MessageType.Info);
             }
-
-            EditorGUILayout.Space(6);
-            DrawStatus("VSCode Debug Config", IsVsCodeDebugConfigInitialized(), VsCodeLaunchJsonPath);
             EditorGUILayout.HelpBox(
-                "Use the Environment section's Install VSCode AriadneTS Debugger button to install the VSCode extension and create this launch config.",
+                "AriadneTS needs Node.js for editor build tools. The local TypeScript compiler is a project build dependency used to compile scripts before packaging; it is not required by the game runtime.",
                 MessageType.None);
         }
 
         private void DrawBuildSection(float contentWidth)
         {
-            EditorGUILayout.LabelField("Build Script Package", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Package Signing And Build", EditorStyles.boldLabel);
             version = TextFieldWithSave("Version", version, VersionKey);
             buildNumber = EditorGUILayout.IntField("Build Number", buildNumber);
             if (buildNumber < 0)
@@ -208,18 +259,6 @@ namespace AriadneTS.Editor
                 buildNumber = 0;
             }
             EditorPrefs.SetInt(BuildNumberKey, buildNumber);
-
-            var previousNodeExecutable = nodeExecutable;
-            DrawPathField(
-                "Node Executable",
-                ref nodeExecutable,
-                NodePathKey,
-                SelectNodeExecutable,
-                contentWidth);
-            if (nodeExecutable != previousNodeExecutable)
-            {
-                RefreshPublicKey();
-            }
 
             var previousPrivateKeyPath = privateKeyPath;
             DrawPathField(
@@ -240,12 +279,38 @@ namespace AriadneTS.Editor
                     GenerateDevelopmentPrivateKey();
                 }
             }
+            DrawStatus("Private Key", File.Exists(privateKeyPath), string.IsNullOrWhiteSpace(privateKeyPath)
+                ? "Not selected"
+                : privateKeyPath);
+
+            EditorGUILayout.LabelField("Public Key");
+            EditorGUILayout.HelpBox(
+                "The public key is derived from the private key. Configure this public key on runtime controllers; keep the private key out of source control.",
+                MessageType.Info);
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.TextArea(
+                    publicKey ?? string.Empty,
+                    GUILayout.Width(contentWidth),
+                    GUILayout.MinHeight(70));
+            }
+            using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(publicKey)))
+            {
+                if (GUILayout.Button("Copy Public Key"))
+                {
+                    EditorGUIUtility.systemCopyBuffer = publicKey;
+                }
+            }
+
             DrawPathField(
                 "Output .bytes",
                 ref outputPackagePath,
                 OutputPathKey,
                 SelectOutputPackage,
                 contentWidth);
+            DrawStatus("Output Package", File.Exists(outputPackagePath), string.IsNullOrWhiteSpace(outputPackagePath)
+                ? "Not built"
+                : outputPackagePath);
 
             using (new EditorGUI.DisabledScope(!CanBuild()))
             {
@@ -263,58 +328,9 @@ namespace AriadneTS.Editor
             }
         }
 
-        private void DrawEnvironmentSection(float contentWidth)
+        private void DrawRuntimeSection()
         {
-            EditorGUILayout.LabelField("Environment", EditorStyles.boldLabel);
-            DrawStatus("Node", File.Exists(nodeExecutable), string.IsNullOrWhiteSpace(nodeExecutable)
-                ? "Not found"
-                : nodeExecutable);
-            DrawStatus("TypeScript Project", IsTypeScriptProjectInitialized(), TypeScriptRoot);
-            DrawStatus("Private Key", File.Exists(privateKeyPath), string.IsNullOrWhiteSpace(privateKeyPath)
-                ? "Not selected"
-                : privateKeyPath);
-            DrawStatus("Output Package", File.Exists(outputPackagePath), string.IsNullOrWhiteSpace(outputPackagePath)
-                ? "Not built"
-                : outputPackagePath);
-            DrawStatus("VSCode Debug Config", IsVsCodeDebugConfigInitialized(), VsCodeLaunchJsonPath);
-            using (new EditorGUI.DisabledScope(!File.Exists(nodeExecutable)))
-            {
-                if (GUILayout.Button("Install VSCode AriadneTS Debugger And Config"))
-                {
-                    InstallVsCodeDebuggerExtension();
-                }
-            }
-            EditorGUILayout.HelpBox(
-                "AriadneTS needs Node.js, a generated TypeScript project, a signing private key, and a built .bytes package. The VSCode button installs the debugger extension and creates .vscode/launch.json for this Unity project root.",
-                MessageType.None);
-        }
-
-        private void DrawSceneSection(float contentWidth)
-        {
-            EditorGUILayout.LabelField("Scene Setup", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Create or update a GameObject with ScriptRuntimeHost, ScriptPackageRuntimeController, and ScriptPackageBootstrapper. The tool fills the public key and the output .bytes asset when they are available.",
-                MessageType.Info);
-
-            using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(publicKey)))
-            {
-                if (GUILayout.Button("Create Or Update Runtime Host In Scene"))
-                {
-                    CreateOrUpdateRuntimeHost();
-                }
-            }
-
-            if (string.IsNullOrEmpty(publicKey))
-            {
-                EditorGUILayout.HelpBox(
-                    "Select a private key first so the tool can fill the controller public key.",
-                    MessageType.Warning);
-            }
-        }
-
-        private void DrawDebugSection(float contentWidth)
-        {
-            EditorGUILayout.LabelField("Script Debugging", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Runtime And Debugging", EditorStyles.boldLabel);
             var changed = false;
             var nextEnabled = EditorGUILayout.Toggle("Enable Debugging", debugEnabled);
             if (nextEnabled != debugEnabled)
@@ -396,27 +412,24 @@ namespace AriadneTS.Editor
             EditorGUILayout.HelpBox(
                 "This config is the source of truth for the open scene RuntimeHost and .vscode/launch.json. Startup Grace gives VSCode time to apply onBeginPlay breakpoints when Wait For Debugger is off. Use a unique Instance Id per Unity/Unreal client or server process.",
                 MessageType.Info);
-        }
 
-        private void DrawPublicKeySection(float contentWidth)
-        {
-            EditorGUILayout.LabelField("Public Key", EditorStyles.boldLabel);
+            EditorGUILayout.Space(6);
             EditorGUILayout.HelpBox(
-                "The public key is derived from the private key. It does not change when TypeScript files or package contents change. It changes only when you use a different private key.",
+                "Create or update a GameObject with ScriptRuntimeHost, ScriptPackageRuntimeController, and ScriptPackageBootstrapper. The tool fills the public key and the output .bytes asset when they are available.",
                 MessageType.Info);
-            using (new EditorGUI.DisabledScope(true))
-            {
-                EditorGUILayout.TextArea(
-                    publicKey ?? string.Empty,
-                    GUILayout.Width(contentWidth),
-                    GUILayout.MinHeight(70));
-            }
             using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(publicKey)))
             {
-                if (GUILayout.Button("Copy Public Key"))
+                if (GUILayout.Button("Create Or Update Runtime Host In Scene"))
                 {
-                    EditorGUIUtility.systemCopyBuffer = publicKey;
+                    CreateOrUpdateRuntimeHost();
                 }
+            }
+
+            if (string.IsNullOrEmpty(publicKey))
+            {
+                EditorGUILayout.HelpBox(
+                    "Select a private key first so the tool can fill the controller public key.",
+                    MessageType.Warning);
             }
         }
 
@@ -506,6 +519,199 @@ namespace AriadneTS.Editor
             }
         }
 
+        private void ShowNodeVersionMenu()
+        {
+            try
+            {
+                var versions = FetchNodeVersions();
+                if (versions.Length == 0)
+                {
+                    EditorUtility.DisplayDialog(
+                        "AriadneTS Node.js Versions",
+                        "No downloadable Node.js versions were found in the Node.js distribution index.",
+                        "OK");
+                    return;
+                }
+
+                var menu = new GenericMenu();
+                var currentVersion = NormalizeNodeVersion(nodeVersion);
+                var latestLts = FindLatestLtsVersion(versions);
+                if (!string.IsNullOrWhiteSpace(latestLts.Version))
+                {
+                    AddNodeVersionMenuItem(menu, "Recommended LTS/" + latestLts.DisplayLabel, latestLts, currentVersion);
+                }
+                AddNodeVersionMenuItem(menu, "Latest Current/" + versions[0].DisplayLabel, versions[0], currentVersion);
+                menu.AddSeparator(string.Empty);
+
+                var count = Math.Min(MaxNodeVersionMenuItems, versions.Length);
+                for (var index = 0; index < count; ++index)
+                {
+                    var candidate = versions[index];
+                    var group = candidate.IsLts ? "LTS" : "Current";
+                    AddNodeVersionMenuItem(menu, group + "/" + candidate.DisplayLabel, candidate, currentVersion);
+                }
+
+                menu.ShowAsContext();
+            }
+            catch (Exception exception)
+            {
+                buildLog = exception.ToString();
+                EditorUtility.DisplayDialog("AriadneTS Node.js Version List Failed", exception.Message, "OK");
+            }
+        }
+
+        private void AddNodeVersionMenuItem(
+            GenericMenu menu,
+            string label,
+            NodeVersionInfo versionInfo,
+            string currentVersion)
+        {
+            var selectedVersion = versionInfo.Version;
+            menu.AddItem(
+                new GUIContent(label),
+                string.Equals(selectedVersion, currentVersion, StringComparison.Ordinal),
+                () =>
+                {
+                    nodeVersion = selectedVersion;
+                    EditorPrefs.SetString(NodeVersionKey, nodeVersion);
+                    buildLog = "Selected Node.js version: v" + nodeVersion;
+                    Repaint();
+                });
+        }
+
+        private static NodeVersionInfo FindLatestLtsVersion(NodeVersionInfo[] versions)
+        {
+            foreach (var versionInfo in versions)
+            {
+                if (versionInfo.IsLts)
+                {
+                    return versionInfo;
+                }
+            }
+
+            return default;
+        }
+
+        private static NodeVersionInfo[] FetchNodeVersions()
+        {
+            string json;
+            using (var client = new WebClient())
+            {
+                json = client.DownloadString(NodeDistributionIndexUrl);
+            }
+
+            var versions = new System.Collections.Generic.List<NodeVersionInfo>();
+            foreach (Match objectMatch in Regex.Matches(json, "\\{[^{}]*\\}"))
+            {
+                var entry = objectMatch.Value;
+                var versionText = ReadJsonString(entry, "version");
+                if (string.IsNullOrWhiteSpace(versionText))
+                {
+                    continue;
+                }
+
+                var normalizedVersion = NormalizeNodeVersion(versionText);
+                if (ParseMajorVersion(normalizedVersion) < 18)
+                {
+                    continue;
+                }
+
+                var ltsText = ReadJsonValue(entry, "lts");
+                var isLts = !string.Equals(ltsText, "false", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(ltsText);
+                versions.Add(new NodeVersionInfo(
+                    normalizedVersion,
+                    ReadJsonString(entry, "date"),
+                    ReadJsonString(entry, "npm"),
+                    isLts ? ltsText.Trim('"') : string.Empty));
+            }
+
+            return versions.ToArray();
+        }
+
+        private static string ReadJsonString(string jsonObject, string propertyName)
+        {
+            var match = Regex.Match(jsonObject, "\"" + Regex.Escape(propertyName) + "\"\\s*:\\s*\"([^\"]*)\"");
+            return match.Success ? match.Groups[1].Value : string.Empty;
+        }
+
+        private static string ReadJsonValue(string jsonObject, string propertyName)
+        {
+            var match = Regex.Match(jsonObject, "\"" + Regex.Escape(propertyName) + "\"\\s*:\\s*(false|\"[^\"]*\")");
+            return match.Success ? match.Groups[1].Value : string.Empty;
+        }
+
+        private void InstallProjectNodeToolchain()
+        {
+            if (!EditorUtility.DisplayDialog(
+                    "Install/Change AriadneTS Project Node.js Toolchain",
+                    "This downloads Node.js " + NormalizeNodeVersion(nodeVersion) +
+                    " into this project under AriadneTS/Toolchain/node. The toolchain folder is ignored by git.",
+                    "Install",
+                    "Cancel"))
+            {
+                return;
+            }
+
+            var archivePath = string.Empty;
+            var extractRoot = string.Empty;
+            var tempRoot = string.Empty;
+            try
+            {
+                var download = CreateNodeDownloadInfo(NormalizeNodeVersion(nodeVersion));
+                tempRoot = Path.Combine(Path.GetTempPath(), "ariadnets-node-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(tempRoot);
+                archivePath = Path.Combine(tempRoot, download.ArchiveFileName);
+                extractRoot = Path.Combine(tempRoot, "extract");
+                Directory.CreateDirectory(extractRoot);
+
+                EditorUtility.DisplayProgressBar("AriadneTS Node.js Toolchain", "Downloading " + download.Url, 0.1f);
+                using (var client = new WebClient())
+                {
+                    client.DownloadFile(download.Url, archivePath);
+                }
+
+                EditorUtility.DisplayProgressBar("AriadneTS Node.js Toolchain", "Extracting archive", 0.6f);
+                ExtractNodeArchive(archivePath, extractRoot, download.IsZip);
+
+                var extractedDirectory = FindSingleExtractedDirectory(extractRoot);
+                if (string.IsNullOrWhiteSpace(extractedDirectory))
+                {
+                    throw new InvalidOperationException("Could not find the extracted Node.js directory.");
+                }
+
+                if (Directory.Exists(ProjectToolchainNodeRoot))
+                {
+                    Directory.Delete(ProjectToolchainNodeRoot, true);
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(ProjectToolchainNodeRoot) ?? ProjectRoot);
+                Directory.Move(extractedDirectory, ProjectToolchainNodeRoot);
+
+                nodeExecutable = DefaultProjectNodeExecutable;
+                npmExecutable = DefaultProjectNpmExecutable;
+                buildLog = "Installed AriadneTS project Node.js toolchain:\n" +
+                    ProjectToolchainNodeRoot +
+                    "\n\nNode: " +
+                    ReadNodeVersionText() +
+                    "\nnpm: " +
+                    NpmStatusText();
+                AssetDatabase.Refresh();
+                Repaint();
+            }
+            catch (Exception exception)
+            {
+                buildLog = exception.ToString();
+                EditorUtility.DisplayDialog("AriadneTS Node.js Toolchain Install Failed", exception.Message, "OK");
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+                CleanupTemporaryPath(archivePath);
+                CleanupTemporaryPath(extractRoot);
+                CleanupTemporaryPath(tempRoot);
+            }
+        }
+
         private void SelectPrivateKey()
         {
             var path = EditorUtility.OpenFilePanel("Select RSA private key", ProjectRoot, "pem");
@@ -516,22 +722,6 @@ namespace AriadneTS.Editor
 
             privateKeyPath = path;
             EditorPrefs.SetString(PrivateKeyKey, privateKeyPath);
-            RefreshPublicKey();
-        }
-
-        private void SelectNodeExecutable()
-        {
-            var defaultDirectory = Application.platform == RuntimePlatform.WindowsEditor
-                ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)
-                : "/usr/local/bin";
-            var path = EditorUtility.OpenFilePanel("Select Node executable", defaultDirectory, string.Empty);
-            if (string.IsNullOrEmpty(path))
-            {
-                return;
-            }
-
-            nodeExecutable = path;
-            EditorPrefs.SetString(NodePathKey, nodeExecutable);
             RefreshPublicKey();
         }
 
@@ -616,6 +806,111 @@ namespace AriadneTS.Editor
 
             var contents = File.ReadAllText(VsCodeLaunchJsonPath);
             return contents.Contains("\"type\": \"ariadnets\"");
+        }
+
+        private void DiagnoseTypeScriptEnvironment()
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("AriadneTS TypeScript Environment");
+            builder.AppendLine("Unity Project Root: " + ProjectRoot);
+            builder.AppendLine("TypeScript Root: " + TypeScriptRoot);
+            builder.AppendLine("Target Node Version: " + NormalizeNodeVersion(nodeVersion));
+            builder.AppendLine("TypeScript Project: " + (IsTypeScriptProjectInitialized() ? "Ready" : "Missing or incomplete"));
+            builder.AppendLine("Node Executable: " + (string.IsNullOrWhiteSpace(nodeExecutable) ? "Not selected" : nodeExecutable));
+            if (File.Exists(nodeExecutable))
+            {
+                builder.AppendLine("Node Version: " + ReadNodeVersionText());
+            }
+            else
+            {
+                builder.AppendLine("Node Version: Missing");
+            }
+
+            var npmCliScript = ResolveNpmCliScript();
+            if (!string.IsNullOrWhiteSpace(npmCliScript))
+            {
+                builder.AppendLine("npm: " + npmCliScript);
+                builder.AppendLine("npm Version: " + ReadNpmPackageVersion(npmCliScript));
+                AppendCompatibilityResult(builder, () => ValidateNpmCompatibility(npmCliScript));
+            }
+            else
+            {
+                builder.AppendLine("npm: " + (string.IsNullOrWhiteSpace(npmExecutable) ? "Not found" : npmExecutable));
+                if (!string.IsNullOrWhiteSpace(npmExecutable))
+                {
+                    var nodeDirectory = Path.GetDirectoryName(nodeExecutable);
+                    var npmVersionResult = RunProcess(npmExecutable, "--version", ProjectRoot, nodeDirectory);
+                    builder.AppendLine("npm Version Output: " + npmVersionResult.CombinedOutput.Trim());
+                    AppendCompatibilityResult(builder, () => ValidateNpmExecutableCompatibility(npmExecutable, nodeDirectory));
+                }
+            }
+
+            builder.AppendLine("Local TypeScript Compiler: " + TypeScriptDependenciesStatusText());
+            builder.AppendLine("VSCode Debug Config: " + (IsVsCodeDebugConfigInitialized() ? VsCodeLaunchJsonPath : "Missing"));
+            buildLog = builder.ToString();
+            Repaint();
+        }
+
+        private static void AppendCompatibilityResult(StringBuilder builder, Action validator)
+        {
+            try
+            {
+                validator();
+                builder.AppendLine("Node/npm Compatibility: Ready");
+            }
+            catch (Exception exception)
+            {
+                builder.AppendLine("Node/npm Compatibility: Incompatible");
+                builder.AppendLine(exception.Message);
+            }
+        }
+
+        private void InstallTypeScriptDependencies()
+        {
+            try
+            {
+                var npmCliScript = ResolveNpmCliScript();
+                ProcessResult result;
+                if (!string.IsNullOrWhiteSpace(npmCliScript) && File.Exists(nodeExecutable))
+                {
+                    ValidateNpmCompatibility(npmCliScript);
+                    result = RunProcess(nodeExecutable, Quote(npmCliScript) + " install", TypeScriptRoot);
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(npmExecutable) || !File.Exists(npmExecutable))
+                    {
+                        throw new InvalidOperationException(
+                            "Could not locate the project npm executable. Install/Change Project Node.js Toolchain first.");
+                    }
+
+                    var nodeDirectory = Path.GetDirectoryName(nodeExecutable);
+                    ValidateNpmExecutableCompatibility(npmExecutable, nodeDirectory);
+                    result = RunProcess(
+                        npmExecutable,
+                        "install",
+                        TypeScriptRoot,
+                        nodeDirectory);
+                }
+
+                buildLog = result.CombinedOutput;
+                if (result.ExitCode != 0)
+                {
+                    EditorUtility.DisplayDialog("AriadneTS Local TypeScript Compiler Install Failed", buildLog, "OK");
+                    return;
+                }
+
+                AssetDatabase.Refresh();
+                EditorUtility.DisplayDialog(
+                    "AriadneTS Local TypeScript Compiler Installed",
+                    "The local TypeScript compiler was installed for the generated TypeScript workspace.",
+                    "OK");
+            }
+            catch (Exception exception)
+            {
+                buildLog = exception.ToString();
+                EditorUtility.DisplayDialog("AriadneTS Local TypeScript Compiler Install Failed", exception.Message, "OK");
+            }
         }
 
         private void InstallVsCodeDebuggerExtension()
@@ -730,6 +1025,25 @@ namespace AriadneTS.Editor
                 Directory.Exists(Path.Combine(TypeScriptRoot, "src"));
         }
 
+        private static bool AreTypeScriptDependenciesInstalled()
+        {
+            return File.Exists(Path.Combine(TypeScriptRoot, "node_modules", "typescript", "package.json")) &&
+                (File.Exists(Path.Combine(TypeScriptRoot, "node_modules", "typescript", "bin", "tsc")) ||
+                 File.Exists(Path.Combine(TypeScriptRoot, "node_modules", "typescript", "lib", "tsc.js")));
+        }
+
+        private static string TypeScriptDependenciesStatusText()
+        {
+            if (!File.Exists(Path.Combine(TypeScriptRoot, "package.json")))
+            {
+                return "Initialize the TypeScript project first.";
+            }
+
+            return AreTypeScriptDependenciesInstalled()
+                ? Path.Combine(TypeScriptRoot, "node_modules", "typescript")
+                : "Missing local TypeScript compiler. Use Install Local TypeScript Compiler or provide a compatible global TypeScript 5.x compiler.";
+        }
+
         private void RefreshPublicKey()
         {
             publicKey = string.Empty;
@@ -770,7 +1084,7 @@ namespace AriadneTS.Editor
                 " --build-number " + buildNumber.ToString(System.Globalization.CultureInfo.InvariantCulture) +
                 " --private-key " + Quote(privateKeyPath) +
                 " --output " + Quote(outputPackagePath) +
-                " --required-abi 4";
+                " --required-abi 5";
 
             try
             {
@@ -783,7 +1097,8 @@ namespace AriadneTS.Editor
                 }
 
                 RefreshPublicKey();
-                AssetDatabase.Refresh();
+                var importedPackage = ImportAndValidateBuiltPackage();
+                UpdateRuntimeHostPackageReference(importedPackage);
                 EditorUtility.DisplayDialog("AriadneTS Build Complete", outputPackagePath, "OK");
             }
             catch (Exception exception)
@@ -837,7 +1152,67 @@ namespace AriadneTS.Editor
             }
         }
 
-        private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory)
+        private TextAsset ImportAndValidateBuiltPackage()
+        {
+            var packageAsset = LoadTextAssetFromAbsolutePath(outputPackagePath, true);
+            if (packageAsset == null)
+            {
+                throw new InvalidOperationException(
+                    "The built package must be located under the Unity project's Assets folder.");
+            }
+
+            var packageReader = new ScriptPackageReader(
+                publicKey,
+                UnityManifestSerializer.Deserialize);
+            var package = packageReader.Read(packageAsset.bytes);
+            if (!string.Equals(package.Manifest.Version, version, StringComparison.Ordinal) ||
+                package.Manifest.BuildNumber != buildNumber)
+            {
+                throw new InvalidOperationException(
+                    "Unity imported a stale script package. Expected " +
+                    version +
+                    " build " +
+                    buildNumber.ToString(CultureInfo.InvariantCulture) +
+                    ", but imported " +
+                    package.Manifest.Version +
+                    " build " +
+                    package.Manifest.BuildNumber.ToString(CultureInfo.InvariantCulture) +
+                    ".");
+            }
+
+            buildLog = (buildLog ?? string.Empty).TrimEnd() +
+                "\nImported Unity package: " +
+                package.Manifest.Version +
+                " build " +
+                package.Manifest.BuildNumber.ToString(CultureInfo.InvariantCulture);
+            return packageAsset;
+        }
+
+        private static void UpdateRuntimeHostPackageReference(TextAsset packageAsset)
+        {
+            var hostObject = GameObject.Find(RuntimeHostObjectName);
+            if (hostObject == null)
+            {
+                return;
+            }
+
+            var bootstrapper = hostObject.GetComponent<ScriptPackageBootstrapper>();
+            if (bootstrapper == null)
+            {
+                return;
+            }
+
+            SetObjectReference(bootstrapper, "packageAsset", packageAsset);
+            SetBool(bootstrapper, "startOnStart", packageAsset != null);
+            EditorUtility.SetDirty(bootstrapper);
+            EditorSceneManager.MarkSceneDirty(hostObject.scene);
+        }
+
+        private static ProcessResult RunProcess(
+            string fileName,
+            string arguments,
+            string workingDirectory,
+            string extraPathDirectory = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -851,6 +1226,15 @@ namespace AriadneTS.Editor
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            if (!string.IsNullOrWhiteSpace(extraPathDirectory) && Directory.Exists(extraPathDirectory))
+            {
+                var currentPath = startInfo.Environment.ContainsKey("PATH")
+                    ? startInfo.Environment["PATH"]
+                    : Environment.GetEnvironmentVariable("PATH");
+                startInfo.Environment["PATH"] = string.IsNullOrWhiteSpace(currentPath)
+                    ? extraPathDirectory
+                    : extraPathDirectory + Path.PathSeparator + currentPath;
+            }
 
             using var process = Process.Start(startInfo);
             var stdout = process.StandardOutput.ReadToEnd();
@@ -905,7 +1289,9 @@ namespace AriadneTS.Editor
                 : Undo.AddComponent(hostObject, type);
         }
 
-        private static TextAsset LoadTextAssetFromAbsolutePath(string absolutePath)
+        private static TextAsset LoadTextAssetFromAbsolutePath(
+            string absolutePath,
+            bool forceSynchronousImport = false)
         {
             if (string.IsNullOrWhiteSpace(absolutePath))
             {
@@ -929,7 +1315,10 @@ namespace AriadneTS.Editor
                 return null;
             }
 
-            AssetDatabase.ImportAsset(relativePath);
+            var importOptions = forceSynchronousImport
+                ? ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport
+                : ImportAssetOptions.Default;
+            AssetDatabase.ImportAsset(relativePath, importOptions);
             return AssetDatabase.LoadAssetAtPath<TextAsset>(relativePath);
         }
 
@@ -1014,15 +1403,159 @@ namespace AriadneTS.Editor
             return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
-        private static string FindDefaultNodeExecutable()
+        private static NodeDownloadInfo CreateNodeDownloadInfo(string version)
         {
+            var platform = Application.platform == RuntimePlatform.WindowsEditor
+                ? "win"
+                : "darwin";
+            var arch = IsArm64Process() ? "arm64" : "x64";
+            var extension = platform == "win" ? "zip" : "tar.gz";
+            var normalizedVersion = NormalizeNodeVersion(version);
+            var packageName = "node-v" + normalizedVersion + "-" + platform + "-" + arch;
+            var archiveFileName = packageName + "." + extension;
+            return new NodeDownloadInfo(
+                "https://nodejs.org/dist/v" + normalizedVersion + "/" + archiveFileName,
+                archiveFileName,
+                extension == "zip");
+        }
+
+        private static string NormalizeNodeVersion(string version)
+        {
+            var normalized = (version ?? string.Empty).Trim();
+            if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(1);
+            }
+
+            return string.IsNullOrWhiteSpace(normalized)
+                ? DefaultNodeVersion
+                : normalized;
+        }
+
+        private static bool IsArm64Process()
+        {
+            var processor = (SystemInfo.processorType ?? string.Empty).ToLowerInvariant();
+            return processor.Contains("arm") || processor.Contains("apple");
+        }
+
+        private static void ExtractNodeArchive(string archivePath, string extractRoot, bool isZip)
+        {
+            if (isZip)
+            {
+                var powershell = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell",
+                    "v1.0",
+                    "powershell.exe");
+                var zipResult = RunProcess(
+                    powershell,
+                    "-NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath " +
+                    QuoteForPowerShell(archivePath) +
+                    " -DestinationPath " +
+                    QuoteForPowerShell(extractRoot) +
+                    " -Force\"",
+                    ProjectRoot);
+                if (zipResult.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(zipResult.CombinedOutput);
+                }
+                return;
+            }
+
+            var tarResult = RunProcess("/usr/bin/tar", "-xzf " + Quote(archivePath) + " -C " + Quote(extractRoot), ProjectRoot);
+            if (tarResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException(tarResult.CombinedOutput);
+            }
+        }
+
+        private static string QuoteForPowerShell(string value)
+        {
+            return "'" + value.Replace("'", "''") + "'";
+        }
+
+        private static string FindSingleExtractedDirectory(string extractRoot)
+        {
+            var directories = Directory.GetDirectories(extractRoot);
+            return directories.Length == 1 ? directories[0] : string.Empty;
+        }
+
+        private static void CleanupTemporaryPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+                else if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, true);
+                }
+            }
+            catch
+            {
+                // Temporary cleanup should not hide the original install result.
+            }
+        }
+
+        private bool HasUsableNpm()
+        {
+            return !string.IsNullOrWhiteSpace(ResolveNpmCliScript()) ||
+                (!string.IsNullOrWhiteSpace(npmExecutable) && File.Exists(npmExecutable));
+        }
+
+        private string NpmStatusText()
+        {
+            var npmCliScript = ResolveNpmCliScript();
+            if (!string.IsNullOrWhiteSpace(npmCliScript))
+            {
+                return npmCliScript + " (" + ReadNpmPackageVersion(npmCliScript) + ")";
+            }
+
+            return string.IsNullOrWhiteSpace(npmExecutable)
+                ? "Not selected"
+                : npmExecutable;
+        }
+
+        private string ResolveNpmCliScript()
+        {
+            var configuredCliScript = FindNpmCliScriptFromExecutable(npmExecutable);
+            if (!string.IsNullOrWhiteSpace(configuredCliScript))
+            {
+                return configuredCliScript;
+            }
+
+            return FindNpmCliScriptFromNode(nodeExecutable);
+        }
+
+        private static string FindNpmCliScriptFromExecutable(string selectedNpmExecutable)
+        {
+            if (string.IsNullOrWhiteSpace(selectedNpmExecutable))
+            {
+                return string.Empty;
+            }
+
+            if (selectedNpmExecutable.EndsWith("npm-cli.js", StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(selectedNpmExecutable))
+            {
+                return selectedNpmExecutable;
+            }
+
+            var npmDirectory = Path.GetDirectoryName(selectedNpmExecutable);
+            if (string.IsNullOrWhiteSpace(npmDirectory))
+            {
+                return string.Empty;
+            }
+
             var candidates = new[]
             {
-                "/opt/homebrew/bin/node",
-                "/usr/local/bin/node",
-                "/usr/bin/node",
-                "C:\\Program Files\\nodejs\\node.exe",
-                "C:\\Program Files (x86)\\nodejs\\node.exe",
+                Path.Combine(npmDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+                Path.GetFullPath(Path.Combine(npmDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")),
             };
             foreach (var candidate in candidates)
             {
@@ -1032,27 +1565,142 @@ namespace AriadneTS.Editor
                 }
             }
 
-            var pathVariable = Environment.GetEnvironmentVariable("PATH");
-            if (!string.IsNullOrWhiteSpace(pathVariable))
+            return string.Empty;
+        }
+
+        private static string FindNpmCliScriptFromNode(string selectedNodeExecutable)
+        {
+            if (string.IsNullOrWhiteSpace(selectedNodeExecutable))
             {
-                var executableName = Application.platform == RuntimePlatform.WindowsEditor
-                    ? "node.exe"
-                    : "node";
-                foreach (var directory in pathVariable.Split(Path.PathSeparator))
+                return string.Empty;
+            }
+
+            var nodeDirectory = Path.GetDirectoryName(selectedNodeExecutable);
+            if (string.IsNullOrWhiteSpace(nodeDirectory))
+            {
+                return string.Empty;
+            }
+
+            var candidates = new[]
+            {
+                Path.Combine(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+                Path.GetFullPath(Path.Combine(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")),
+            };
+            foreach (var candidate in candidates)
+            {
+                if (File.Exists(candidate))
                 {
-                    if (string.IsNullOrWhiteSpace(directory))
-                    {
-                        continue;
-                    }
-                    var candidate = Path.Combine(directory.Trim(), executableName);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
+                    return candidate;
                 }
             }
 
             return string.Empty;
+        }
+
+        private void ValidateNpmCompatibility(string npmCliScript)
+        {
+            var nodeMajorVersion = ReadNodeMajorVersion();
+            var npmVersion = ReadNpmPackageVersion(npmCliScript);
+            var npmMajorVersion = ParseMajorVersion(npmVersion);
+            if (nodeMajorVersion >= 20 && npmMajorVersion > 0 && npmMajorVersion < 10)
+            {
+                throw new InvalidOperationException(
+                    "The selected Node.js installation is using an npm version that is too old for it.\n\n" +
+                    "Node: " + nodeExecutable + "\n" +
+                    "Node major version: " + nodeMajorVersion.ToString(CultureInfo.InvariantCulture) + "\n" +
+                    "npm: " + npmCliScript + "\n" +
+                    "npm version: " + npmVersion + "\n\n" +
+                    "Recommended fixes:\n" +
+                    "1. Install a Node.js LTS or current release that bundles a modern npm.\n" +
+                    "2. In this window, set Node Executable to that installation's node binary.\n" +
+                    "3. Or update npm for the selected Node installation, then retry Install Local TypeScript Compiler.");
+            }
+        }
+
+        private void ValidateNpmExecutableCompatibility(string npmExecutable, string nodeDirectory)
+        {
+            var nodeMajorVersion = ReadNodeMajorVersion();
+            var result = RunProcess(npmExecutable, "--version", ProjectRoot, nodeDirectory);
+            var npmMajorVersion = ParseMajorVersion(result.Stdout.Trim());
+            if (nodeMajorVersion >= 20 &&
+                (npmMajorVersion > 0 && npmMajorVersion < 10 ||
+                 result.CombinedOutput.IndexOf("does not support Node.js", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                throw new InvalidOperationException(
+                    "The selected Node.js installation is using an npm version that is too old for it.\n\n" +
+                    "Node: " + nodeExecutable + "\n" +
+                    "Node major version: " + nodeMajorVersion.ToString(CultureInfo.InvariantCulture) + "\n" +
+                    "npm: " + npmExecutable + "\n" +
+                    "npm version output: " + result.CombinedOutput.Trim() + "\n\n" +
+                    "Recommended fixes:\n" +
+                    "1. Install a Node.js LTS or current release that bundles a modern npm.\n" +
+                    "2. In this window, set Node Executable to that installation's node binary.\n" +
+                    "3. Or update npm for the selected Node installation, then retry Install Local TypeScript Compiler.");
+            }
+        }
+
+        private string ReadNodeVersionText()
+        {
+            if (string.IsNullOrWhiteSpace(nodeExecutable) || !File.Exists(nodeExecutable))
+            {
+                return string.Empty;
+            }
+
+            var result = RunProcess(nodeExecutable, "--version", ProjectRoot);
+            return result.ExitCode == 0 ? result.CombinedOutput.Trim() : result.CombinedOutput.Trim();
+        }
+
+        private int ReadNodeMajorVersion()
+        {
+            if (string.IsNullOrWhiteSpace(nodeExecutable) || !File.Exists(nodeExecutable))
+            {
+                return 0;
+            }
+
+            var result = RunProcess(nodeExecutable, "--version", ProjectRoot);
+            if (result.ExitCode != 0)
+            {
+                return 0;
+            }
+
+            var match = Regex.Match(result.CombinedOutput, @"v?(\d+)\.");
+            return match.Success
+                ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)
+                : 0;
+        }
+
+        private static string ReadNpmPackageVersion(string npmCliScript)
+        {
+            if (string.IsNullOrWhiteSpace(npmCliScript))
+            {
+                return string.Empty;
+            }
+
+            var packageJson = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(npmCliScript) ?? string.Empty,
+                "..",
+                "package.json"));
+            if (!File.Exists(packageJson))
+            {
+                return string.Empty;
+            }
+
+            var contents = File.ReadAllText(packageJson);
+            var match = Regex.Match(contents, "\"version\"\\s*:\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : string.Empty;
+        }
+
+        private static int ParseMajorVersion(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                return 0;
+            }
+
+            var match = Regex.Match(version, @"^(\d+)\.");
+            return match.Success
+                ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)
+                : 0;
         }
 
         private readonly struct ProcessResult
@@ -1068,6 +1716,43 @@ namespace AriadneTS.Editor
             public string Stdout { get; }
             public string Stderr { get; }
             public string CombinedOutput => Stdout + Stderr;
+        }
+
+        private readonly struct NodeDownloadInfo
+        {
+            public NodeDownloadInfo(string url, string archiveFileName, bool isZip)
+            {
+                Url = url;
+                ArchiveFileName = archiveFileName;
+                IsZip = isZip;
+            }
+
+            public string Url { get; }
+            public string ArchiveFileName { get; }
+            public bool IsZip { get; }
+        }
+
+        private readonly struct NodeVersionInfo
+        {
+            public NodeVersionInfo(string version, string date, string npmVersion, string ltsName)
+            {
+                Version = version;
+                Date = date;
+                NpmVersion = npmVersion;
+                LtsName = ltsName;
+            }
+
+            public string Version { get; }
+            public string Date { get; }
+            public string NpmVersion { get; }
+            public string LtsName { get; }
+            public bool IsLts => !string.IsNullOrWhiteSpace(LtsName);
+            public string DisplayLabel =>
+                "v" +
+                Version +
+                (IsLts ? " LTS (" + LtsName + ")" : string.Empty) +
+                (string.IsNullOrWhiteSpace(NpmVersion) ? string.Empty : " npm " + NpmVersion) +
+                (string.IsNullOrWhiteSpace(Date) ? string.Empty : " " + Date);
         }
     }
 }

@@ -100,7 +100,10 @@ namespace AriadneTS.Runtime
         private ScriptRuntime runtime;
         private Func<string, string> moduleLoader;
         private ScriptPackageManifest activeManifest;
+        private ScriptPackageDebugMetadata activeDebugMetadata;
         private Exception lastReportedException;
+        private readonly Dictionary<string, SourceMap> sourceMapCache =
+            new Dictionary<string, SourceMap>(StringComparer.Ordinal);
         private readonly Dictionary<string, Func<string, string>> hostHandlers =
             new Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
 
@@ -154,6 +157,8 @@ namespace AriadneTS.Runtime
 
             ConfigureModuleLoader(loader);
             entryModule = configuredEntryModule;
+            activeManifest = null;
+            activeDebugMetadata = null;
         }
 
         public void StartPackage(ScriptPackage package)
@@ -165,6 +170,7 @@ namespace AriadneTS.Runtime
 
             ConfigureScriptSource(package.LoadModule, package.Manifest.EntryModule);
             activeManifest = package.Manifest;
+            activeDebugMetadata = ParseDebugMetadata(package);
             try
             {
                 StartRuntime();
@@ -172,6 +178,7 @@ namespace AriadneTS.Runtime
             catch
             {
                 activeManifest = null;
+                activeDebugMetadata = null;
                 throw;
             }
         }
@@ -184,7 +191,9 @@ namespace AriadneTS.Runtime
             }
 
             var previousManifest = activeManifest;
+            var previousDebugMetadata = activeDebugMetadata;
             activeManifest = package.Manifest;
+            activeDebugMetadata = ParseDebugMetadata(package);
             try
             {
                 SwitchScriptSource(package.LoadModule, package.Manifest.EntryModule);
@@ -192,6 +201,7 @@ namespace AriadneTS.Runtime
             catch
             {
                 activeManifest = previousManifest;
+                activeDebugMetadata = previousDebugMetadata;
                 throw;
             }
         }
@@ -225,6 +235,7 @@ namespace AriadneTS.Runtime
             }
 
             RegisterBuiltInHostHandlers();
+            sourceMapCache.Clear();
             ReportPackageConfiguration();
             ReportDebugConfiguration();
             if (enableScriptDebugging)
@@ -298,6 +309,7 @@ namespace AriadneTS.Runtime
             var previousLoader = moduleLoader;
             var previousEntryModule = entryModule;
             var previousManifest = activeManifest;
+            var previousDebugMetadata = activeDebugMetadata;
             StopRuntime();
 
             try
@@ -312,6 +324,7 @@ namespace AriadneTS.Runtime
                 StopRuntime();
                 ConfigureScriptSource(previousLoader, previousEntryModule);
                 activeManifest = previousManifest;
+                activeDebugMetadata = previousDebugMetadata;
                 StartRuntime();
                 InvokeRuntime("afterReload", "afterReload", stateJson);
                 runtime.ExecutePendingJobs(maxJobsPerFrame);
@@ -499,12 +512,30 @@ namespace AriadneTS.Runtime
             return port;
         }
 
-        private static string HandleScriptLog(string payloadJson)
+        private static ScriptPackageDebugMetadata ParseDebugMetadata(ScriptPackage package)
+        {
+            if (package == null || string.IsNullOrEmpty(package.DebugMetadataJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonUtility.FromJson<ScriptPackageDebugMetadata>(package.DebugMetadataJson);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private string HandleScriptLog(string payloadJson)
         {
             var payload = JsonUtility.FromJson<ScriptLogPayload>(payloadJson ?? "{}");
             var message = payload != null && payload.message != null
                 ? payload.message
                 : string.Empty;
+            message = MapScriptStack(message);
             switch (payload?.level)
             {
                 case "warning":
@@ -664,7 +695,9 @@ namespace AriadneTS.Runtime
             {
                 builder.Append("Payload: ").AppendLine(payloadJson);
             }
-            builder.Append("Message: ").AppendLine(exception.Message);
+            var scriptMessage = MapScriptStack(exception.Message);
+            AppendMappedSourceLocation(builder, scriptMessage);
+            builder.Append("Message: ").AppendLine(scriptMessage);
             if (!string.IsNullOrEmpty(exception.StackTrace))
             {
                 builder.AppendLine("Managed Stack:");
@@ -679,8 +712,21 @@ namespace AriadneTS.Runtime
             builder.AppendLine("AriadneTS Script Error");
             builder.Append("Mode: Release").AppendLine();
             AppendCommonFields(builder, phase, exception, method);
-            builder.Append("Message: ").AppendLine(Summarize(exception.Message));
+            builder.Append("Message: ").AppendLine(Summarize(MapScriptStack(exception.Message)));
             return builder.ToString().TrimEnd();
+        }
+
+        private void AppendMappedSourceLocation(StringBuilder builder, string message)
+        {
+            if (TryFindFirstScriptLocation(message, out var location))
+            {
+                builder.Append("Source: ")
+                    .Append(location.Module)
+                    .Append(':')
+                    .Append(location.Line.ToString(CultureInfo.InvariantCulture))
+                    .Append(':')
+                    .AppendLine(location.Column.ToString(CultureInfo.InvariantCulture));
+            }
         }
 
         private void AppendCommonFields(
@@ -718,6 +764,374 @@ namespace AriadneTS.Runtime
 
             var firstLine = message.Split(new[] { '\r', '\n' }, 2)[0];
             return firstLine.Length <= 240 ? firstLine : firstLine.Substring(0, 240);
+        }
+
+        private string MapScriptStack(string message)
+        {
+            if (string.IsNullOrEmpty(message) || moduleLoader == null)
+            {
+                return message;
+            }
+
+            var lines = message.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            var changed = false;
+            for (var index = 0; index < lines.Length; ++index)
+            {
+                if (!TryParseStackLine(lines[index], out var prefix, out var module, out var line, out var column, out var suffix))
+                {
+                    continue;
+                }
+
+                var mapped = MapGeneratedLocation(module, line, column);
+                if (mapped == null)
+                {
+                    continue;
+                }
+
+                lines[index] = prefix +
+                    mapped.Module +
+                    ":" +
+                    mapped.Line.ToString(CultureInfo.InvariantCulture) +
+                    ":" +
+                    mapped.Column.ToString(CultureInfo.InvariantCulture) +
+                    suffix;
+                changed = true;
+            }
+
+            return changed ? string.Join("\n", lines) : message;
+        }
+
+        private SourceLocation MapGeneratedLocation(string module, int line, int column)
+        {
+            if (string.IsNullOrEmpty(module) || !module.EndsWith(".js", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var normalizedModule = ScriptPackage.NormalizePath(module);
+            var sourceMapPath = activeDebugMetadata?.FindSourceMapPath(normalizedModule) ??
+                normalizedModule + ".map";
+            var sourceMap = LoadSourceMap(sourceMapPath);
+            if (sourceMap == null ||
+                sourceMap.sources == null ||
+                string.IsNullOrEmpty(sourceMap.mappings))
+            {
+                return null;
+            }
+
+            var mapping = FindBestSourceMapSegment(sourceMap.mappings, line, Math.Max(0, column - 1));
+            if (mapping == null ||
+                mapping.SourceIndex < 0 ||
+                mapping.SourceIndex >= sourceMap.sources.Length)
+            {
+                return null;
+            }
+
+            var source = ResolveSourceMapPath(normalizedModule, sourceMap.sourceRoot, sourceMap.sources[mapping.SourceIndex]);
+            return new SourceLocation(source, mapping.OriginalLine + 1, mapping.OriginalColumn + 1);
+        }
+
+        private SourceMap LoadSourceMap(string mapModule)
+        {
+            if (sourceMapCache.TryGetValue(mapModule, out var cached))
+            {
+                return cached;
+            }
+
+            var source = moduleLoader(mapModule);
+            if (string.IsNullOrEmpty(source))
+            {
+                sourceMapCache[mapModule] = null;
+                return null;
+            }
+
+            try
+            {
+                var parsed = JsonUtility.FromJson<SourceMap>(source);
+                sourceMapCache[mapModule] = parsed;
+                return parsed;
+            }
+            catch
+            {
+                sourceMapCache[mapModule] = null;
+                return null;
+            }
+        }
+
+        private static string ResolveSourceMapPath(string generatedModule, string sourceRoot, string source)
+        {
+            var baseDirectory = Path.GetDirectoryName(generatedModule)?.Replace('\\', '/') ?? string.Empty;
+            var combined = NormalizeModulePath(
+                CombineModulePath(CombineModulePath(baseDirectory, sourceRoot), source));
+            while (combined.StartsWith("../", StringComparison.Ordinal))
+            {
+                combined = combined.Substring(3);
+            }
+            return combined;
+        }
+
+        private static string CombineModulePath(string left, string right)
+        {
+            if (string.IsNullOrEmpty(left))
+            {
+                return right ?? string.Empty;
+            }
+            if (string.IsNullOrEmpty(right))
+            {
+                return left;
+            }
+            return left.TrimEnd('/') + "/" + right.TrimStart('/');
+        }
+
+        private static string NormalizeModulePath(string path)
+        {
+            var parts = new List<string>();
+            foreach (var part in (path ?? string.Empty).Replace('\\', '/').Split('/'))
+            {
+                if (string.IsNullOrEmpty(part) || part == ".")
+                {
+                    continue;
+                }
+                if (part == "..")
+                {
+                    if (parts.Count > 0 && parts[parts.Count - 1] != "..")
+                    {
+                        parts.RemoveAt(parts.Count - 1);
+                    }
+                    else
+                    {
+                        parts.Add(part);
+                    }
+                    continue;
+                }
+                parts.Add(part);
+            }
+            return string.Join("/", parts);
+        }
+
+        private static bool TryFindFirstScriptLocation(string message, out SourceLocation location)
+        {
+            location = null;
+            if (string.IsNullOrEmpty(message))
+            {
+                return false;
+            }
+
+            var lines = message.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            foreach (var lineText in lines)
+            {
+                if (TryParseStackLine(lineText, out _, out var module, out var line, out var column, out _))
+                {
+                    location = new SourceLocation(module, line, column);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool TryParseStackLine(
+            string lineText,
+            out string prefix,
+            out string module,
+            out int line,
+            out int column,
+            out string suffix)
+        {
+            prefix = string.Empty;
+            module = string.Empty;
+            line = 0;
+            column = 0;
+            suffix = string.Empty;
+
+            if (string.IsNullOrEmpty(lineText))
+            {
+                return false;
+            }
+
+            var secondColon = lineText.LastIndexOf(':');
+            if (secondColon <= 0)
+            {
+                return false;
+            }
+            var firstColon = lineText.LastIndexOf(':', secondColon - 1);
+            if (firstColon <= 0)
+            {
+                return false;
+            }
+
+            var columnEnd = secondColon + 1;
+            while (columnEnd < lineText.Length && char.IsDigit(lineText[columnEnd]))
+            {
+                ++columnEnd;
+            }
+            if (columnEnd == secondColon + 1 ||
+                !int.TryParse(lineText.Substring(secondColon + 1, columnEnd - secondColon - 1), out column) ||
+                !int.TryParse(lineText.Substring(firstColon + 1, secondColon - firstColon - 1), out line))
+            {
+                return false;
+            }
+
+            var moduleStart = firstColon - 1;
+            while (moduleStart >= 0 &&
+                !char.IsWhiteSpace(lineText[moduleStart]) &&
+                lineText[moduleStart] != '(')
+            {
+                --moduleStart;
+            }
+            ++moduleStart;
+            if (moduleStart >= firstColon)
+            {
+                return false;
+            }
+
+            prefix = lineText.Substring(0, moduleStart);
+            module = lineText.Substring(moduleStart, firstColon - moduleStart);
+            suffix = lineText.Substring(columnEnd);
+            return module.EndsWith(".js", StringComparison.Ordinal) ||
+                module.EndsWith(".ts", StringComparison.Ordinal);
+        }
+
+        private static SourceMapSegment FindBestSourceMapSegment(string mappings, int generatedLine, int generatedColumn)
+        {
+            var lines = mappings.Split(';');
+            var targetLineIndex = generatedLine - 1;
+            if (targetLineIndex < 0 || targetLineIndex >= lines.Length)
+            {
+                return null;
+            }
+
+            var sourceIndex = 0;
+            var originalLine = 0;
+            var originalColumn = 0;
+            for (var lineIndex = 0; lineIndex <= targetLineIndex; ++lineIndex)
+            {
+                var generatedColumnCursor = 0;
+                SourceMapSegment best = null;
+                foreach (var segment in lines[lineIndex].Split(','))
+                {
+                    if (string.IsNullOrEmpty(segment))
+                    {
+                        continue;
+                    }
+
+                    var values = DecodeSourceMapSegment(segment);
+                    if (values.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    generatedColumnCursor += values[0];
+                    if (values.Count >= 4)
+                    {
+                        sourceIndex += values[1];
+                        originalLine += values[2];
+                        originalColumn += values[3];
+                        if (lineIndex == targetLineIndex && generatedColumnCursor <= generatedColumn)
+                        {
+                            best = new SourceMapSegment(sourceIndex, originalLine, originalColumn);
+                        }
+                    }
+                }
+
+                if (lineIndex == targetLineIndex)
+                {
+                    return best;
+                }
+            }
+            return null;
+        }
+
+        private static List<int> DecodeSourceMapSegment(string segment)
+        {
+            var values = new List<int>();
+            var index = 0;
+            while (index < segment.Length)
+            {
+                values.Add(DecodeVlq(segment, ref index));
+            }
+            return values;
+        }
+
+        private static int DecodeVlq(string text, ref int index)
+        {
+            var result = 0;
+            var shift = 0;
+            while (index < text.Length)
+            {
+                var digit = SourceMapBase64Value(text[index]);
+                ++index;
+                result += (digit & 31) << shift;
+                if ((digit & 32) == 0)
+                {
+                    break;
+                }
+                shift += 5;
+            }
+
+            var negative = (result & 1) == 1;
+            var value = result >> 1;
+            return negative ? -value : value;
+        }
+
+        private static int SourceMapBase64Value(char character)
+        {
+            if (character >= 'A' && character <= 'Z')
+            {
+                return character - 'A';
+            }
+            if (character >= 'a' && character <= 'z')
+            {
+                return character - 'a' + 26;
+            }
+            if (character >= '0' && character <= '9')
+            {
+                return character - '0' + 52;
+            }
+            if (character == '+')
+            {
+                return 62;
+            }
+            return character == '/' ? 63 : 0;
+        }
+
+#pragma warning disable 0649
+        [Serializable]
+        private sealed class SourceMap
+        {
+            public int version;
+            public string file;
+            public string sourceRoot;
+            public string[] sources;
+            public string mappings;
+        }
+#pragma warning restore 0649
+
+        private sealed class SourceLocation
+        {
+            public SourceLocation(string module, int line, int column)
+            {
+                Module = module;
+                Line = line;
+                Column = column;
+            }
+
+            public string Module { get; }
+            public int Line { get; }
+            public int Column { get; }
+        }
+
+        private sealed class SourceMapSegment
+        {
+            public SourceMapSegment(int sourceIndex, int originalLine, int originalColumn)
+            {
+                SourceIndex = sourceIndex;
+                OriginalLine = originalLine;
+                OriginalColumn = originalColumn;
+            }
+
+            public int SourceIndex { get; }
+            public int OriginalLine { get; }
+            public int OriginalColumn { get; }
         }
 
         private void WriteScriptLog(string message)

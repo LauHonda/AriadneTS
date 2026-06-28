@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
@@ -15,6 +16,8 @@ const adapterPath = path.join(
 );
 const port = 49390;
 const receivedRuntimeCommands = [];
+const tracePath = path.join(root, "UnityProject", "TypeScript", ".ariadnets", "debug-adapter-test.log");
+fs.rmSync(tracePath, { force: true });
 
 const server = net.createServer((socket) => {
   socket.setEncoding("utf8");
@@ -117,10 +120,15 @@ try {
     host: "127.0.0.1",
     port,
     tsRoot: path.join(root, "UnityProject", "TypeScript"),
-    pollIntervalMs: 1000,
+    pollIntervalMs: 50,
+    tracePath,
   });
   const attach = await waitForResponse("attach");
   assert(attach.success, "attach failed");
+
+  sendRequest("setExceptionBreakpoints", { filters: [] });
+  const setExceptionBreakpoints = await waitForResponse("setExceptionBreakpoints");
+  assert(setExceptionBreakpoints.success, "setExceptionBreakpoints failed");
 
   sendRequest("setBreakpoints", {
     source: {
@@ -141,6 +149,19 @@ try {
     "adapter did not forward setBreakpoint",
   );
 
+  sendRequest("configurationDone", {});
+  const configurationDone = await waitForResponse("configurationDone");
+  assert(configurationDone.success, "configurationDone failed");
+  const appliedBreakpointCount = receivedRuntimeCommands.filter(
+    (command) => command.command === "setBreakpoint",
+  ).length;
+  await sleep(250);
+  assert(
+    receivedRuntimeCommands.filter((command) => command.command === "setBreakpoint").length ===
+      appliedBreakpointCount,
+    "adapter reapplied unchanged breakpoints during status polling",
+  );
+
   sendRequest("stepIn", { threadId: 1 });
   const stepIn = await waitForResponse("stepIn");
   assert(stepIn.success, "stepIn failed");
@@ -155,10 +176,17 @@ try {
     receivedRuntimeCommands.some((command) => command.command === "stepOut"),
     "adapter did not forward stepOut",
   );
+  const trace = fs.readFileSync(tracePath, "utf8");
+  assert(trace.includes("\"command\":\"stepIn\""), "trace did not record stepIn");
+  assert(trace.includes("runtime.send"), "trace did not record runtime commands");
 
   sendRequest("disconnect", {});
   const disconnect = await waitForResponse("disconnect");
   assert(disconnect.success, "disconnect failed");
+  assert(
+    receivedRuntimeCommands.some((command) => command.command === "continue"),
+    "adapter did not resume runtime on disconnect",
+  );
 } finally {
   adapter.kill();
   server.close();
@@ -297,7 +325,10 @@ async function testRealRuntimeBreakpoint() {
 
       dap.sendRequest("next", { threadId: 1 });
       assert((await dap.waitForResponse("next")).success, "integration next failed");
-      await dap.waitForEvent("stopped", 10000);
+      const nextContinued = await dap.waitForEvent("continued", 10000);
+      assert(nextContinued.body?.threadId === 1, "next continued thread did not match");
+      const stepStopped = await dap.waitForEvent("stopped", 10000);
+      assert(stepStopped.body?.reason === "step", "next stopped reason should be step");
       dap.sendRequest("stackTrace", { threadId: 1 });
       const nextStackTrace = await dap.waitForResponse("stackTrace");
       const nextFrame = nextStackTrace.body?.stackFrames?.[0];
@@ -305,6 +336,8 @@ async function testRealRuntimeBreakpoint() {
 
       dap.sendRequest("continue", { threadId: 1 });
       assert((await dap.waitForResponse("continue")).success, "integration continue failed");
+      const continueEvent = await dap.waitForEvent("continued", 10000);
+      assert(continueEvent.body?.allThreadsContinued === true, "continue event missing allThreadsContinued");
       await waitForBufferedOutput(() => runtimeOutput, "DONE", 10000);
     } finally {
       integrationAdapter.kill();

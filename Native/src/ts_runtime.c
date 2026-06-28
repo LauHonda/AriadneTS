@@ -33,7 +33,7 @@ typedef int ts_socket;
 
 #include "quickjs.h"
 
-#define TS_RUNTIME_ABI_VERSION 4u
+#define TS_RUNTIME_ABI_VERSION 5u
 #define TS_DEFAULT_FILENAME "<eval>"
 #define TS_MAX_DEBUG_BREAKPOINTS 256
 
@@ -1198,6 +1198,27 @@ static char* debug_stringify_value(JSContext* context, JSValueConst value) {
     return copy;
 }
 
+static char* debug_variables_json(JSContext* context, JSValueConst value) {
+    if (JS_IsUndefined(value) || JS_IsNull(value)) {
+        return duplicate_c_string("{}");
+    }
+
+    if (!JS_IsFunction(context, value)) {
+        return debug_stringify_value(context, value);
+    }
+
+    JSValue snapshot = JS_Call(context, value, JS_UNDEFINED, 0, NULL);
+    if (JS_IsException(snapshot)) {
+        JSValue exception = JS_GetException(context);
+        JS_FreeValue(context, exception);
+        return duplicate_c_string("{\"<error>\":\"<unavailable>\"}");
+    }
+
+    char* json = debug_stringify_value(context, snapshot);
+    JS_FreeValue(context, snapshot);
+    return json;
+}
+
 static void debug_pause_at(
     ts_runtime* runtime,
     const char* module_name,
@@ -1236,10 +1257,26 @@ static void debug_pause_at(
     );
     debug_log(runtime, message);
 
+    uint64_t paused_deadline = runtime->deadline_nanoseconds;
+    uint64_t paused_remaining_nanoseconds = 0;
+    if (paused_deadline != 0) {
+        uint64_t now = monotonic_nanoseconds();
+        paused_remaining_nanoseconds = paused_deadline > now
+            ? paused_deadline - now
+            : 1;
+        runtime->deadline_nanoseconds = 0;
+    }
+
     uint32_t observed_continue_counter = runtime->debug_continue_counter;
     while (!runtime->debug_stop_requested &&
         runtime->debug_continue_counter == observed_continue_counter) {
         sleep_milliseconds(50);
+    }
+
+    if (paused_deadline != 0) {
+        runtime->deadline_nanoseconds = runtime->debug_stop_requested
+            ? paused_deadline
+            : monotonic_nanoseconds() + paused_remaining_nanoseconds;
     }
 
     clear_debug_pause_location(runtime);
@@ -1296,7 +1333,7 @@ static JSValue debug_checkpoint(
         ? JS_ToCString(context, arguments[3])
         : NULL;
     char* variables_json = argument_count > 4
-        ? debug_stringify_value(context, arguments[4])
+        ? debug_variables_json(context, arguments[4])
         : duplicate_c_string("{}");
     const char* stack = argument_count > 5
         ? JS_ToCString(context, arguments[5])
@@ -1351,9 +1388,6 @@ static JSValue debug_line_probe(
     const char* function_name = argument_count > 3
         ? JS_ToCString(context, arguments[3])
         : NULL;
-    char* variables_json = argument_count > 4
-        ? debug_stringify_value(context, arguments[4])
-        : duplicate_c_string("{}");
     const char* stack = argument_count > 5
         ? JS_ToCString(context, arguments[5])
         : NULL;
@@ -1361,10 +1395,13 @@ static JSValue debug_line_probe(
     int32_t stack_depth = debug_stack_depth(stack);
     if (debug_has_breakpoint(runtime, module_name, line) ||
         debug_should_pause_for_step(runtime, stack_depth)) {
+        char* variables_json = argument_count > 4
+            ? debug_variables_json(context, arguments[4])
+            : duplicate_c_string("{}");
         debug_pause_at(runtime, module_name, line, column, function_name, variables_json, stack);
+        free(variables_json);
     }
 
-    free(variables_json);
     if (stack != NULL) {
         JS_FreeCString(context, stack);
     }

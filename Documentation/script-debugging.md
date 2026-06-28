@@ -10,6 +10,8 @@ designed for day-to-day TypeScript gameplay debugging: breakpoints, continue,
 step controls, source-mapped stack frames, local snapshots, bounded object
 expansion, and simple watch expressions.
 
+`AriadneTS Debugger 0.1.0` is the first developer-facing debugger release.
+
 ## Port Strategy
 
 Each runtime instance computes its port as:
@@ -141,10 +143,65 @@ positions such as imports, exports, object method declarations, and class-like
 declarations. If a line does not pause yet, use an explicit `debugger;`
 statement as the reliable fallback.
 
+Multiline variable initializers and call expressions are probed at the start of
+the statement. For example, a breakpoint on:
+
+```ts
+const actor = Ariadne.actors.create({
+  type: ActorType.Player,
+});
+```
+
+pauses before `actor` is assigned. Existing locals are visible at that point;
+`actor` becomes visible on the next executable line after the initializer.
+This includes Actor instances such as the default `demoPlayer` in
+`src/game-application.ts`; place the inspection breakpoint on the statement
+after the create call to see the assigned object snapshot.
+Variable inspection works from JavaScript runtime values and does not require a
+debugger adapter for each TypeScript interface, class, or business-defined type.
+Object snapshots include own enumerable fields and a bounded set of prototype
+getter properties. Getter reads are wrapped in failure handling, so engine-neutral
+runtime accessors such as `Actor.position` can appear in Locals without requiring
+type-specific debugger adapters.
+
 Dynamic line probes are intended for business scripts. AriadneTS SDK files under
 `ariadnets-sdk/` are not dynamically probed by default, which keeps framework
 startup and frequently used bridge/component code from paying debugger snapshot
 costs. Generated source maps still allow SDK frames to appear in call stacks.
+
+## Debug Metadata
+
+Every built script package includes `debug-metadata.json` next to the generated
+modules. This metadata is part of the package payload and records:
+
+- package version and build number;
+- entry module;
+- generated JavaScript modules and their source-map paths;
+- executable TypeScript probe locations used for dynamic breakpoint binding.
+
+The build tool also writes the same index to
+`TypeScript/.ariadnets/debug-metadata.json`. VSCode uses this persistent copy
+when resolving breakpoint lines, so cleaning `dist` does not disconnect the
+editor from the package probe table. If the metadata is missing, the adapter
+falls back to scanning `dist/*.js`.
+
+## Unity Console Locations
+
+In development diagnostics, AriadneTS rewrites JavaScript stack frames with
+package source maps before printing script errors or script log messages to the
+Unity Console. The formatted error includes a `Source:` field and mapped stack
+lines such as:
+
+```text
+Source: src/game-application.ts:58:49
+Message: Error: ...
+    at onBeginPlay (src/game-application.ts:58:49)
+```
+
+Unity may still attach the managed C# call site to the console entry because the
+message is emitted through `ScriptRuntimeHost`, but the AriadneTS diagnostic
+payload should identify the TypeScript source location. The same package-level
+debug metadata is used by VSCode breakpoint binding.
 
 ## JSON Commands
 
@@ -171,13 +228,30 @@ Developers do not need to open the AriadneTS source repository. From the Unity
 project:
 
 1. Open **Tools > AriadneTS > Script Tools**.
-2. Click **Install VSCode AriadneTS Debugger** once per machine.
-3. Click **Create VSCode Debug Config** if `.vscode/launch.json` is not present.
+2. In **Environment Setup**, click **Install VSCode AriadneTS Debugger And
+   Config** once per machine.
+3. In **Runtime And Debugging**, apply debug settings if `.vscode/launch.json`
+   needs to be refreshed.
 4. Restart VSCode or run **Developer: Reload Window**.
 5. Open the Unity project root in VSCode.
 
 The Unity and Unreal editor tools upsert the AriadneTS attach configuration.
 Existing non-AriadneTS VSCode debug configurations are preserved.
+
+The adapter synchronizes breakpoints when the breakpoint set changes and after
+a runtime reconnect. Normal status polling does not recreate unchanged
+breakpoints. Optional protocol tracing can be enabled with `tracePath`; it is
+disabled by default.
+
+When a script is paused at an AriadneTS breakpoint, the runtime suspends the
+normal script execution timeout until execution resumes. Closing or terminating
+the VSCode debug session sends a best-effort continue command so Unity or Unreal
+Play Mode is not left waiting at a stale pause.
+
+Lazy debug variable snapshots require runtime ABI 5 or newer. Rebuild and deploy
+the native runtime plugin together with script packages after debugger runtime
+updates; otherwise the package reader reports an ABI mismatch instead of running
+with missing Locals.
 
 Use the existing launch configuration:
 
@@ -190,10 +264,23 @@ Recommended flow:
 1. Build the TypeScript package from Unity so line probes are included.
 2. Restart Unity after native plugin changes.
 3. Enable AriadneTS script debugging in Unity.
-4. Use **Install VSCode AriadneTS Debugger And Config** after adapter updates.
+4. Use **Environment Setup > Install VSCode AriadneTS Debugger And Config**
+   after adapter updates.
 5. Set breakpoints in `TypeScript/**/*.ts`.
 6. Start **Attach AriadneTS** in VSCode.
 7. Start Play Mode.
+
+After building, the Unity editor tool synchronously imports the package asset
+and validates its manifest. At Play Mode startup, verify that the Unity Console
+reports the version and build number you just created:
+
+```text
+AriadneTS starting script package 0.2.0 build 2.
+```
+
+The build number does not enable or disable debugging. It is shown only so the
+developer can confirm that Unity loaded the package produced by the intended
+build operation.
 
 For `onBeginPlay` breakpoints, either enable **Wait For Debugger** or keep
 **Startup Grace Ms** above `0` so VSCode has time to apply the breakpoints before
@@ -264,11 +351,19 @@ Project Settings > Plugins > AriadneTS
 Set the same debug defaults, then use:
 
 ```text
-Tools > AriadneTS > Initialize TypeScript Workspace
-Tools > AriadneTS > Generate Development Private Key
-Tools > AriadneTS > Build TypeScript Package
-Tools > AriadneTS > Install VSCode Debugger And Config
-Tools > AriadneTS > Create Runtime Host
+Tools > AriadneTS Environment Setup
+  Install/Change Project Node.js Toolchain
+  Diagnose TypeScript Environment
+  Initialize TypeScript Workspace
+  Install Local TypeScript Compiler
+  Install VSCode Debugger And Config
+
+Tools > AriadneTS Package Signing And Build
+  Generate Development Private Key
+  Build TypeScript Package
+
+Tools > AriadneTS Runtime And Debugging
+  Create Runtime Host
 ```
 
 The runtime host also supports command-line overrides for multi-client and

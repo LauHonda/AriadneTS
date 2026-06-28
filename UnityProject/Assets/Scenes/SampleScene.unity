@@ -519,6 +519,7 @@ MonoBehaviour:
   debugInstanceId: 0
   debugRole: Client
   waitForDebugger: 0
+  debugStartupGraceMilliseconds: 1000
 --- !u!4 &1240758148
 Transform:
   m_ObjectHideFlags: 0
