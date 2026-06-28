@@ -9,7 +9,7 @@
 namespace
 {
 constexpr uint32 PackageFormatVersion = 1;
-constexpr uint32 RequiredRuntimeAbiVersion = 4;
+constexpr uint32 RequiredRuntimeAbiVersion = 5;
 
 bool ReadBytes(const TArray<uint8>& Bytes, int64& Offset, void* OutData, int64 Length)
 {

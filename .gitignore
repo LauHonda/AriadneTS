@@ -7,6 +7,7 @@ UnityCompileTests/bin/
 UnityCompileTests/obj/
 TypeScript/dist/
 TypeScript/node_modules/
+AriadneTS/Toolchain/
 script-package-private-key.pem
 *.pem
 *.key
@@ -29,6 +30,9 @@ UnityProject/[Uu]ser[Ss]ettings/
 UnityProject/MemoryCaptures/
 UnityProject/Recordings/
 UnityProject/TypeScript/dist/
+UnityProject/TypeScript/node_modules/
+UnityProject/TypeScript/.ariadnets/
+UnityProject/AriadneTS/Toolchain/
 UnityProject/Assets/TypeScript/*.bytes
 UnityProject/Assets/TypeScript/*.bytes.meta
 !UnityProject/Assets/TypeScript/typescript-package.bytes

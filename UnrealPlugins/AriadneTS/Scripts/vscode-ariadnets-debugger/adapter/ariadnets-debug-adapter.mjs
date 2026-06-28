@@ -4,12 +4,13 @@ import net from "node:net";
 import path from "node:path";
 
 class DapConnection {
-  constructor(input, output) {
+  constructor(input, output, trace) {
     this.input = input;
     this.output = output;
     this.buffer = Buffer.alloc(0);
     this.nextSeq = 1;
     this.handlers = new Map();
+    this.trace = trace;
 
     input.on("data", (chunk) => this.onData(chunk));
   }
@@ -48,6 +49,7 @@ class DapConnection {
       } catch {
         continue;
       }
+      this.trace?.("dap.receive", summarizeDapMessage(message));
       void this.dispatch(message);
     }
   }
@@ -72,6 +74,7 @@ class DapConnection {
   }
 
   send(message) {
+    this.trace?.("dap.send", summarizeDapMessage(message));
     const payload = Buffer.from(JSON.stringify(message), "utf8");
     this.output.write(`Content-Length: ${payload.length}\r\n\r\n`);
     this.output.write(payload);
@@ -108,10 +111,11 @@ class DapConnection {
 }
 
 class AriadneTsClient {
-  constructor() {
+  constructor(trace) {
     this.host = "127.0.0.1";
     this.port = 9229;
     this.timeoutMs = 750;
+    this.trace = trace;
   }
 
   configure(options) {
@@ -120,6 +124,7 @@ class AriadneTsClient {
   }
 
   async command(payload) {
+    this.trace?.("runtime.send", { command: payload.command });
     return await new Promise((resolve, reject) => {
       const socket = net.createConnection({ host: this.host, port: this.port });
       let response = "";
@@ -149,8 +154,11 @@ class AriadneTsClient {
           return;
         }
         try {
-          resolve(JSON.parse(text));
+          const parsed = JSON.parse(text);
+          this.trace?.("runtime.receive", summarizeRuntimeResponse(payload.command, parsed));
+          resolve(parsed);
         } catch {
+          this.trace?.("runtime.receive", { command: payload.command, text: true });
           resolve({ text });
         }
       };
@@ -181,15 +189,20 @@ class AriadneTsClient {
 
 class AriadneDebugSession {
   constructor() {
-    this.dap = new DapConnection(process.stdin, process.stdout);
-    this.client = new AriadneTsClient();
+    this.tracePath = undefined;
+    this.traceInitialized = false;
+    this.trace = (event, data) => this.writeTrace(event, data);
+    this.dap = new DapConnection(process.stdin, process.stdout, this.trace);
+    this.client = new AriadneTsClient(this.trace);
     this.tsRoot = path.resolve("TypeScript");
     this.pollIntervalMs = 250;
     this.pollTimer = undefined;
+    this.pollInProgress = false;
     this.pendingBreakpoints = new Map();
+    this.breakpointsDirty = true;
     this.probeLinesByModule = new Map();
+    this.debugMetadata = undefined;
     this.sourceMapCache = new Map();
-    this.appliedBreakpointKey = "";
     this.variableHandles = new Map();
     this.nextVariableHandle = 1;
     this.lastStatus = { state: "running", module: "", line: 0, column: 0 };
@@ -197,13 +210,14 @@ class AriadneDebugSession {
     this.lastStoppedPauseId = 0;
     this.wasRuntimeConnected = false;
     this.threadId = 1;
+    this.nextStopReason = "breakpoint";
 
     this.registerHandlers();
   }
 
   registerHandlers() {
     this.dap.on("initialize", async () => {
-      queueMicrotask(() => this.dap.sendEvent("initialized"));
+      setImmediate(() => this.dap.sendEvent("initialized"));
       return {
         supportsConfigurationDoneRequest: true,
         supportsTerminateRequest: true,
@@ -213,6 +227,8 @@ class AriadneDebugSession {
         supportsSetVariable: false,
         supportsEvaluateForHovers: true,
         supportsStepBack: false,
+        supportsInvalidatedEvent: true,
+        exceptionBreakpointFilters: [],
       };
     });
 
@@ -234,27 +250,37 @@ class AriadneDebugSession {
     });
 
     this.dap.on("setBreakpoints", async (args) => this.setBreakpoints(args));
+    this.dap.on("setExceptionBreakpoints", async () => ({ breakpoints: [] }));
+    this.dap.on("setFunctionBreakpoints", async () => ({ breakpoints: [] }));
     this.dap.on("threads", async () => ({
       threads: [{ id: this.threadId, name: "AriadneTS Runtime" }],
     }));
-    this.dap.on("stackTrace", async () => this.stackTrace());
-    this.dap.on("scopes", async () => this.scopes());
-    this.dap.on("variables", async (args) => this.variables(args));
-    this.dap.on("evaluate", async (args) => this.evaluate(args));
-    this.dap.on("continue", async () => {
-      await this.client.command({ command: "continue" });
-      this.wasPaused = false;
-      return { allThreadsContinued: true };
+    this.dap.on("stackTrace", async () => {
+      this.writeTrace("debug.request", { command: "stackTrace" });
+      return await this.stackTrace();
     });
-    this.dap.on("next", async () => this.step("next"));
-    this.dap.on("stepIn", async () => this.step("stepIn"));
-    this.dap.on("stepOut", async () => this.step("stepOut"));
+    this.dap.on("scopes", async (args) => {
+      this.writeTrace("debug.request", { command: "scopes", frameId: args.frameId });
+      return this.scopes();
+    });
+    this.dap.on("variables", async (args) => {
+      this.writeTrace("debug.request", {
+        command: "variables",
+        variablesReference: args.variablesReference,
+      });
+      return await this.variables(args);
+    });
+    this.dap.on("evaluate", async (args) => this.evaluate(args));
+    this.dap.on("continue", async () => this.resume("continue"));
+    this.dap.on("next", async () => this.resume("next"));
+    this.dap.on("stepIn", async () => this.resume("stepIn"));
+    this.dap.on("stepOut", async () => this.resume("stepOut"));
     this.dap.on("disconnect", async () => {
-      this.stopPolling();
+      await this.endDebugSession();
       return {};
     });
     this.dap.on("terminate", async () => {
-      this.stopPolling();
+      await this.endDebugSession();
       this.dap.sendEvent("terminated");
       return {};
     });
@@ -265,8 +291,30 @@ class AriadneDebugSession {
     if (args.tsRoot) {
       this.tsRoot = path.resolve(args.tsRoot);
     }
+    this.tracePath = args.tracePath ? path.resolve(args.tracePath) : undefined;
+    if (this.tracePath && !this.traceInitialized) {
+      try {
+        fs.mkdirSync(path.dirname(this.tracePath), { recursive: true });
+        fs.writeFileSync(this.tracePath, "", "utf8");
+      } catch {
+        // Tracing must never break the debug session.
+      }
+      this.traceInitialized = true;
+    }
+    this.writeTrace("session.configure", {
+      host: this.client.host,
+      port: this.client.port,
+      tsRoot: this.tsRoot,
+    });
     this.refreshProbeIndex();
+    if (!this.debugMetadata) {
+      this.output(
+        `Debug metadata was not found under ${this.tsRoot}. ` +
+        "Build the script package or verify the launch configuration tsRoot.",
+      );
+    }
     this.sourceMapCache.clear();
+    this.breakpointsDirty = true;
     if (args.pollIntervalMs) {
       this.pollIntervalMs = Math.max(100, Number(args.pollIntervalMs));
     }
@@ -278,6 +326,7 @@ class AriadneDebugSession {
     const requestedLines = (args.breakpoints ?? []).map((breakpoint) => Number(breakpoint.line));
     const resolvedLines = requestedLines.map((line) => this.resolveBreakpointLine(modulePath, line));
     this.pendingBreakpoints.set(modulePath, resolvedLines);
+    this.breakpointsDirty = true;
 
     await this.applyBreakpointsBestEffort(modulePath, resolvedLines);
     return {
@@ -293,14 +342,20 @@ class AriadneDebugSession {
   }
 
   async applyAllBreakpointsBestEffort() {
-    for (const [modulePath, lines] of this.pendingBreakpoints) {
-      await this.applyBreakpointsBestEffort(modulePath, lines);
+    if (!this.breakpointsDirty) {
+      return true;
     }
+
+    for (const [modulePath, lines] of this.pendingBreakpoints) {
+      if (!await this.applyBreakpointsBestEffort(modulePath, lines)) {
+        return false;
+      }
+    }
+    this.breakpointsDirty = false;
+    return true;
   }
 
   async applyBreakpointsBestEffort(modulePath, lines) {
-    const breakpointKey = JSON.stringify([...this.pendingBreakpoints].sort());
-    const shouldLogApply = breakpointKey !== this.appliedBreakpointKey;
     try {
       const current = await this.client.command({ command: "listBreakpoints" });
       for (const breakpoint of current.breakpoints ?? []) {
@@ -319,13 +374,15 @@ class AriadneDebugSession {
           line,
         });
       }
-      this.appliedBreakpointKey = breakpointKey;
-      if (shouldLogApply && lines.length > 0) {
+      if (lines.length > 0) {
         this.output(`Applied ${lines.length} breakpoint(s) to ${modulePath} on ${this.client.host}:${this.client.port}.`);
       }
+      this.breakpointsDirty = false;
+      return true;
     } catch (error) {
-      this.output(`Waiting for AriadneTS runtime at ${this.client.host}:${this.client.port}: ${error instanceof Error ? error.message : String(error)}`);
+      this.breakpointsDirty = true;
       // The Unity/Unreal runtime may not be in Play Mode yet. Polling will retry.
+      return false;
     }
   }
 
@@ -346,7 +403,30 @@ class AriadneDebugSession {
     }
   }
 
+  async endDebugSession() {
+    this.stopPolling();
+    await this.resumeRuntimeBestEffort();
+    this.wasPaused = false;
+    this.wasRuntimeConnected = false;
+    this.lastStoppedPauseId = 0;
+    this.lastStatus = { state: "running", module: "", line: 0, column: 0 };
+    this.variableHandles.clear();
+    this.nextVariableHandle = 1;
+  }
+
+  async resumeRuntimeBestEffort() {
+    try {
+      await this.client.command({ command: "continue" });
+    } catch {
+      // The runtime may already have stopped with Unity/Unreal Play Mode.
+    }
+  }
+
   async pollStatus() {
+    if (this.pollInProgress) {
+      return;
+    }
+    this.pollInProgress = true;
     try {
       await this.applyAllBreakpointsBestEffort();
       const status = await this.client.command({ command: "status" });
@@ -367,8 +447,10 @@ class AriadneDebugSession {
         }
         this.variableHandles.clear();
         this.nextVariableHandle = 1;
+        const reason = this.nextStopReason;
+        this.nextStopReason = "breakpoint";
         this.dap.sendEvent("stopped", {
-          reason: "breakpoint",
+          reason,
           description: this.describePausedStatus(status),
           text: this.describePausedStatus(status),
           threadId: this.threadId,
@@ -382,7 +464,15 @@ class AriadneDebugSession {
         this.output(`Lost AriadneTS runtime connection: ${error instanceof Error ? error.message : String(error)}`);
       }
       this.wasRuntimeConnected = false;
+      this.wasPaused = false;
+      this.lastStoppedPauseId = 0;
+      this.lastStatus = { state: "running", module: "", line: 0, column: 0 };
+      this.variableHandles.clear();
+      this.nextVariableHandle = 1;
+      this.breakpointsDirty = true;
       // Runtime not available yet. Keep polling quietly.
+    } finally {
+      this.pollInProgress = false;
     }
   }
 
@@ -794,10 +884,19 @@ class AriadneDebugSession {
     };
   }
 
-  async step(command) {
+  async resume(command) {
     await this.client.command({ command });
     this.wasPaused = false;
-    return {};
+    this.nextStopReason = command === "continue" ? "breakpoint" : "step";
+    this.variableHandles.clear();
+    this.nextVariableHandle = 1;
+    this.dap.sendEvent("continued", {
+      threadId: this.threadId,
+      allThreadsContinued: true,
+    });
+    return command === "continue"
+      ? { allThreadsContinued: true }
+      : {};
   }
 
   storeVariablesReference(value) {
@@ -847,6 +946,22 @@ class AriadneDebugSession {
 
   refreshProbeIndex() {
     this.probeLinesByModule = new Map();
+    this.debugMetadata = this.loadDebugMetadata();
+    if (this.debugMetadata) {
+      for (const probe of this.debugMetadata.Probes ?? []) {
+        const modulePath = String(probe.Source ?? "").replaceAll("\\", "/");
+        const line = Number(probe.Line);
+        if (!modulePath || !Number.isFinite(line)) {
+          continue;
+        }
+        if (!this.probeLinesByModule.has(modulePath)) {
+          this.probeLinesByModule.set(modulePath, new Set());
+        }
+        this.probeLinesByModule.get(modulePath).add(line);
+      }
+      return;
+    }
+
     const distRoot = path.join(this.tsRoot, "dist");
     if (!fs.existsSync(distRoot)) {
       return;
@@ -867,6 +982,27 @@ class AriadneDebugSession {
         this.probeLinesByModule.get(modulePath).add(line);
       }
     }
+  }
+
+  loadDebugMetadata() {
+    const candidates = [
+      path.join(this.tsRoot, ".ariadnets", "debug-metadata.json"),
+      path.join(this.tsRoot, "dist", "debug-metadata.json"),
+    ];
+    for (const metadataPath of candidates) {
+      if (!fs.existsSync(metadataPath)) {
+        continue;
+      }
+      try {
+        const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+        if (metadata?.SchemaVersion === 1 && Array.isArray(metadata.Probes)) {
+          return metadata;
+        }
+      } catch {
+        // Try the next compatible metadata location.
+      }
+    }
+    return undefined;
   }
 
   resolveBreakpointLine(modulePath, requestedLine) {
@@ -892,6 +1028,57 @@ class AriadneDebugSession {
       output: `[AriadneTS] ${text}\n`,
     });
   }
+
+  writeTrace(event, data) {
+    if (!this.tracePath) {
+      return;
+    }
+    try {
+      fs.mkdirSync(path.dirname(this.tracePath), { recursive: true });
+      fs.appendFileSync(
+        this.tracePath,
+        `${new Date().toISOString()} ${event} ${JSON.stringify(data ?? {})}\n`,
+        "utf8",
+      );
+    } catch {
+      // Tracing must never break the debug session.
+    }
+  }
+}
+
+function summarizeDapMessage(message) {
+  const summary = {
+    type: message?.type,
+    command: message?.command,
+    event: message?.event,
+    success: message?.success,
+    requestSeq: message?.request_seq,
+  };
+  if (message?.command === "scopes") {
+    summary.frameId = message.arguments?.frameId;
+  } else if (message?.command === "variables") {
+    summary.variablesReference = message.arguments?.variablesReference;
+  } else if (message?.command === "stackTrace") {
+    summary.threadId = message.arguments?.threadId;
+  }
+  return summary;
+}
+
+function summarizeRuntimeResponse(command, response) {
+  const summary = { command };
+  if (command === "status") {
+    summary.state = response?.state;
+    summary.pauseId = response?.pauseId;
+    summary.module = response?.module;
+    summary.line = response?.line;
+  } else if (command === "variables") {
+    summary.variableNames = Object.keys(response?.variables ?? {});
+  } else if (command === "stack") {
+    summary.hasStack = typeof response?.stack === "string" && response.stack.length > 0;
+  } else {
+    summary.ok = response?.ok;
+  }
+  return summary;
 }
 
 function listFiles(directory) {

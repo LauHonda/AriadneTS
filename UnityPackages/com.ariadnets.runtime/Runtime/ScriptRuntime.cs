@@ -6,7 +6,7 @@ namespace AriadneTS.Runtime
 {
     public sealed class ScriptRuntime : IDisposable
     {
-        public const uint RequiredAbiVersion = 4;
+        public const uint RequiredAbiVersion = 5;
 
         private static readonly NativeMethods.LogCallback LogCallback = HandleLog;
         private static readonly NativeMethods.ModuleLoadCallback ModuleLoadCallback = HandleModuleLoad;

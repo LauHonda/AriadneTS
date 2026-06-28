@@ -10,7 +10,7 @@ THIRD_PARTY_INCLUDES_END
 class ARIADNETS_API FAriadneNativeRuntime
 {
 public:
-    static constexpr uint32 RequiredAbiVersion = 4;
+    static constexpr uint32 RequiredAbiVersion = 5;
 
     FAriadneNativeRuntime();
     ~FAriadneNativeRuntime();

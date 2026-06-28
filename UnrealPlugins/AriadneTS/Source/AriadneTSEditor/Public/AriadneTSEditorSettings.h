@@ -12,7 +12,13 @@ class UAriadneTSEditorSettings : public UDeveloperSettings
 
 public:
     UPROPERTY(Config, EditAnywhere, Category = "Environment")
-    FString NodeExecutable = TEXT("node");
+    FString NodeExecutable = TEXT("{ProjectDir}/AriadneTS/Toolchain/node/bin/node");
+
+    UPROPERTY(Config, EditAnywhere, Category = "Environment")
+    FString NpmExecutable = TEXT("{ProjectDir}/AriadneTS/Toolchain/node/bin/npm");
+
+    UPROPERTY(Config, EditAnywhere, Category = "Environment")
+    FString NodeVersion = TEXT("22.13.1");
 
     UPROPERTY(Config, EditAnywhere, Category = "TypeScript")
     FString TypeScriptRoot = TEXT("{ProjectDir}/TypeScript");

@@ -67,6 +67,12 @@ The runtime verifies the signed manifest and every module before exposing a
 `ScriptPackage`. Version selection and rollback target selection are not part
 of this format or runtime.
 
+Built packages also include `debug-metadata.json`. It is verified like any other
+package file and describes source maps, executable TypeScript probe locations,
+and package identity. Engine adapters and the VSCode debug adapter use this as
+the common debug data layer so breakpoint binding, stack mapping, and console
+diagnostics stay aligned with the actual package being executed.
+
 The Unity-facing public key uses `RSA1.<Base64Url modulus>.<Base64Url exponent>`
 and imports through `RSA.ImportParameters`; it does not depend on Unity support
 for ASN.1 SubjectPublicKeyInfo parsing.
@@ -76,9 +82,9 @@ for ASN.1 SubjectPublicKeyInfo parsing.
 - The JSON host bridge is synchronous and must run on the runtime owner thread.
 - JSON invocation is a correctness and low-frequency business path, not the
   final high-frequency binding path.
-- Debug probes use source maps to report paused TypeScript locations. Rich
-  object inspection and watch expression evaluation are still future debugger
-  work.
+- Debugger Locals, Watch, and object expansion are snapshot based. They are
+  designed for business debugging, not editable variables or native memory
+  inspection.
 - Linux and WebGL native plugins are not built.
 - Final plugin import behavior and cryptography support must be verified in the
   actual Unity Editor and IL2CPP players.

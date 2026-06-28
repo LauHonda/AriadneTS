@@ -130,6 +130,35 @@ internal static class Program
         }
 
         using (var debugRuntimeReady = new ManualResetEventSlim(false))
+        using (var startPausedScript = new ManualResetEventSlim(false))
+        {
+            const int timeoutDebugPort = 49337;
+            logs.Clear();
+            var pausedScript = Task.Run(() =>
+            {
+                using var runtime = new ScriptRuntime(
+                    logs.Add,
+                    executionTimeoutMilliseconds: 100,
+                    debugEnabled: true,
+                    debugHost: "127.0.0.1",
+                    debugPort: timeoutDebugPort);
+                debugRuntimeReady.Set();
+                startPausedScript.Wait();
+                runtime.Evaluate("globalThis.__ariadnets_debug_checkpoint('timeout.js', 3, 0); host.log('after timeout-safe continue');");
+            });
+
+            Require(debugRuntimeReady.Wait(TimeSpan.FromSeconds(3)), "Timeout debug runtime did not start.");
+            startPausedScript.Set();
+            Thread.Sleep(300);
+            Require(!pausedScript.IsCompleted, "Timeout debug checkpoint should pause script execution.");
+
+            var response = SendDebugCommand(timeoutDebugPort, "{\"command\":\"continue\"}\n");
+            Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Timeout debug continue response did not match.");
+            Require(pausedScript.Wait(TimeSpan.FromSeconds(3)), "Debug pause consumed execution timeout after continue.");
+            Require(logs.Contains("after timeout-safe continue"), "Script did not continue after timeout-safe debug pause.");
+        }
+
+        using (var debugRuntimeReady = new ManualResetEventSlim(false))
         using (var startDynamicScript = new ManualResetEventSlim(false))
         {
             const int dynamicDebugPort = 49331;
@@ -165,6 +194,44 @@ internal static class Program
             Require(response.Contains("continued", StringComparison.Ordinal), "Dynamic continue response did not match.");
             Require(dynamicScript.Wait(TimeSpan.FromSeconds(3)), "Dynamic breakpoint did not resume after continue.");
             Require(logs.Contains("after dynamic continue"), "Script did not continue after dynamic breakpoint.");
+        }
+
+        using (var debugRuntimeReady = new ManualResetEventSlim(false))
+        using (var startLazyScript = new ManualResetEventSlim(false))
+        {
+            const int lazyDebugPort = 49338;
+            logs.Clear();
+            var lazyScript = Task.Run(() =>
+            {
+                using var runtime = new ScriptRuntime(
+                    logs.Add,
+                    debugEnabled: true,
+                    debugHost: "127.0.0.1",
+                    debugPort: lazyDebugPort);
+                debugRuntimeReady.Set();
+                startLazyScript.Wait();
+                runtime.Evaluate(
+                    "globalThis.__ariadnets_debug_line('lazy.ts', 4, 0, 'lazy', () => { throw new Error('snapshot should be lazy'); }, 'at lazy (lazy.ts:4:0)');" +
+                    "const payload = { value: 42 };" +
+                    "globalThis.__ariadnets_debug_line('lazy.ts', 5, 0, 'lazy', () => ({ payload }), 'at lazy (lazy.ts:5:0)');" +
+                    "host.log('after lazy continue');");
+            });
+
+            Require(debugRuntimeReady.Wait(TimeSpan.FromSeconds(3)), "Lazy debug runtime did not start.");
+            var response = SendDebugCommand(lazyDebugPort, "{\"command\":\"setBreakpoint\",\"module\":\"lazy.ts\",\"line\":5}\n");
+            Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Lazy breakpoint was not set.");
+
+            startLazyScript.Set();
+            Thread.Sleep(200);
+            Require(!lazyScript.IsCompleted, "Lazy breakpoint should pause script execution.");
+            response = SendDebugCommand(lazyDebugPort, "{\"command\":\"variables\"}\n");
+            Require(response.Contains("\"payload\"", StringComparison.Ordinal), "Lazy variable snapshot did not run at the active breakpoint.");
+            Require(response.Contains("\"value\":42", StringComparison.Ordinal), "Lazy variable payload value is missing.");
+
+            response = SendDebugCommand(lazyDebugPort, "{\"command\":\"continue\"}\n");
+            Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Lazy continue response did not match.");
+            Require(lazyScript.Wait(TimeSpan.FromSeconds(3)), "Lazy debug script did not finish after continue.");
+            Require(logs.Contains("after lazy continue"), "Script did not continue after lazy breakpoint.");
         }
 
         using (var debugRuntimeReady = new ManualResetEventSlim(false))
@@ -353,6 +420,30 @@ internal static class Program
                 bytes,
                 new JsonSerializerOptions { IncludeFields = true }));
         var package = reader.Read(File.ReadAllBytes(packagePath));
+        Require(
+            !string.IsNullOrEmpty(package.DebugMetadataJson),
+            "Unity project package is missing debug metadata.");
+        using (var debugMetadata = JsonDocument.Parse(package.DebugMetadataJson))
+        {
+            var root = debugMetadata.RootElement;
+            Require(
+                root.GetProperty("SchemaVersion").GetInt32() == 1,
+                "Unexpected debug metadata schema version.");
+            var hasMultilineProbe = false;
+            foreach (var probe in root.GetProperty("Probes").EnumerateArray())
+            {
+                var module = probe.GetProperty("Module").GetString() ?? string.Empty;
+                Require(
+                    !module.StartsWith("ariadnets-sdk/", StringComparison.Ordinal),
+                    "AriadneTS SDK files should not contain dynamic debug probes.");
+                hasMultilineProbe |=
+                    probe.GetProperty("Source").GetString() == "src/game-application.ts" &&
+                    probe.GetProperty("Line").GetInt32() == 74;
+            }
+            Require(
+                hasMultilineProbe,
+                "Multiline statement probe is missing for game-application.ts:74.");
+        }
 
         logs.Clear();
         using var runtime = new ScriptRuntime(
@@ -370,6 +461,99 @@ internal static class Program
             greeting == "{\"reply\":\"Hello from TypeScript, Hello from C#\"}",
             $"Unexpected Unity project package result: {greeting}");
         runtime.Invoke("onEndPlay");
+        TestUnityProjectPackageDebugging(package);
+    }
+
+    private static void TestUnityProjectPackageDebugging(ScriptPackage package)
+    {
+        const int debugPort = 49336;
+        using var runtimeReady = new ManualResetEventSlim(false);
+        using var invokeBeginPlay = new ManualResetEventSlim(false);
+        using var beginPlayCompleted = new ManualResetEventSlim(false);
+        using var invokeTick = new ManualResetEventSlim(false);
+        var script = Task.Run(() =>
+        {
+            using var runtime = new ScriptRuntime(
+                _ => { },
+                package.LoadModule,
+                hostInvoker: CreateDemoHostInvoker("UnityProjectDebug"),
+                debugEnabled: true,
+                debugHost: "127.0.0.1",
+                debugPort: debugPort);
+            runtime.EvaluateModule(
+                package.LoadModule(package.Manifest.EntryModule),
+                package.Manifest.EntryModule);
+            runtimeReady.Set();
+            invokeBeginPlay.Wait();
+            runtime.Invoke("onBeginPlay");
+            beginPlayCompleted.Set();
+            invokeTick.Wait();
+            runtime.Invoke("onTick", "{\"deltaTime\":1.25}");
+            runtime.Invoke("onEndPlay");
+        });
+
+        Require(runtimeReady.Wait(TimeSpan.FromSeconds(5)), "Unity package debug runtime did not start.");
+        var response = SendDebugCommand(
+            debugPort,
+            "{\"command\":\"setBreakpoint\",\"module\":\"src/game-application.ts\",\"line\":74}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Unity package multiline breakpoint was not set.");
+        response = SendDebugCommand(
+            debugPort,
+            "{\"command\":\"setBreakpoint\",\"module\":\"src/game-application.ts\",\"line\":80}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Unity package post-initializer breakpoint was not set.");
+
+        invokeBeginPlay.Set();
+        Thread.Sleep(200);
+        Require(!beginPlayCompleted.IsSet, "Unity package should pause at the multiline statement breakpoint.");
+        response = SendDebugCommand(debugPort, "{\"command\":\"variables\"}\n");
+        Require(response.Contains("\"this\"", StringComparison.Ordinal), "Unity package multiline breakpoint is missing this.");
+        Require(response.Contains("\"player\"", StringComparison.Ordinal), "Unity package multiline breakpoint is missing player.");
+        Require(!response.Contains("\"demoPlayer\"", StringComparison.Ordinal), "demoPlayer should not exist before its initializer runs.");
+
+        response = SendDebugCommand(
+            debugPort,
+            "{\"command\":\"clearBreakpoint\",\"module\":\"src/game-application.ts\",\"line\":74}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Unity package multiline breakpoint was not cleared.");
+        response = SendDebugCommand(debugPort, "{\"command\":\"continue\"}\n");
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Unity package multiline continue failed.");
+
+        Thread.Sleep(200);
+        Require(!beginPlayCompleted.IsSet, "Unity package should pause after assigning demoPlayer.");
+        response = SendDebugCommand(debugPort, "{\"command\":\"variables\"}\n");
+        Require(response.Contains("\"demoPlayer\"", StringComparison.Ordinal), "Unity package demoPlayer local is missing after assignment.");
+        Require(response.Contains("\"name\":\"DemoPlayer\"", StringComparison.Ordinal), "Unity package demoPlayer value is missing.");
+        Require(response.Contains("\"position\":{\"x\":1", StringComparison.Ordinal), "Unity package demoPlayer.position getter value is missing.");
+
+        response = SendDebugCommand(
+            debugPort,
+            "{\"command\":\"clearBreakpoint\",\"module\":\"src/game-application.ts\",\"line\":80}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Unity package post-initializer breakpoint was not cleared.");
+        response = SendDebugCommand(debugPort, "{\"command\":\"continue\"}\n");
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Unity package post-initializer continue failed.");
+        Require(beginPlayCompleted.Wait(TimeSpan.FromSeconds(5)), "Unity package onBeginPlay did not finish.");
+
+        response = SendDebugCommand(
+            debugPort,
+            "{\"command\":\"setBreakpoint\",\"module\":\"src/game-application.ts\",\"line\":87}\n");
+        Require(response.Contains("\"ok\":true", StringComparison.Ordinal), "Unity package breakpoint was not set.");
+
+        invokeTick.Set();
+        Thread.Sleep(200);
+        Require(!script.IsCompleted, "Unity package should pause at the onTick breakpoint.");
+
+        response = SendDebugCommand(debugPort, "{\"command\":\"variables\"}\n");
+        Require(response.Contains("\"payload\"", StringComparison.Ordinal), "Unity package payload local is missing.");
+        Require(response.Contains("\"deltaTime\":1.25", StringComparison.Ordinal), "Unity package payload value is missing.");
+
+        response = SendDebugCommand(debugPort, "{\"command\":\"next\"}\n");
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Unity package next command failed.");
+        Thread.Sleep(200);
+        var status = SendDebugCommand(debugPort, "{\"command\":\"status\"}\n");
+        Require(status.Contains("\"line\":88", StringComparison.Ordinal), "Unity package next did not stop at line 88.");
+
+        response = SendDebugCommand(debugPort, "{\"command\":\"continue\"}\n");
+        Require(response.Contains("\"continued\":true", StringComparison.Ordinal), "Unity package continue command failed.");
+        Require(script.Wait(TimeSpan.FromSeconds(5)), "Unity package debug runtime did not finish.");
     }
 
     private static Func<string, string, string> CreateDemoHostInvoker(string engineName)
@@ -594,8 +778,12 @@ internal static class Program
 
         var commandBytes = Encoding.UTF8.GetBytes(command);
         stream.Write(commandBytes, 0, commandBytes.Length);
-        read = stream.Read(buffer, 0, buffer.Length);
-        return Encoding.UTF8.GetString(buffer, 0, read);
+        using var response = new MemoryStream();
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            response.Write(buffer, 0, read);
+        }
+        return Encoding.UTF8.GetString(response.ToArray());
     }
 
     private static string EncodeBase64Url(byte[] data)

@@ -7,8 +7,9 @@
       "name": "Attach AriadneTS",
       "host": "127.0.0.1",
       "port": 9229,
-      "tsRoot": "${workspaceFolder}/TypeScript",
-      "pollIntervalMs": 250
+      "tsRoot": "${workspaceFolder}/UnityProject/TypeScript",
+      "pollIntervalMs": 250,
+      "tracePath": "${workspaceFolder}/UnityProject/TypeScript/.ariadnets/debug-adapter.log"
     }
   ]
 }

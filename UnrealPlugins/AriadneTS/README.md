@@ -28,13 +28,33 @@ Then regenerate project files and open the project in Unreal Editor.
 After the plugin is enabled, use:
 
 ```text
-Tools > AriadneTS > Initialize TypeScript Workspace
-Tools > AriadneTS > Generate Development Private Key
-Tools > AriadneTS > Build TypeScript Package
-Tools > AriadneTS > Install VSCode Debugger And Config
-Tools > AriadneTS > Create VSCode Debug Config
-Tools > AriadneTS > Create Runtime Host
+Tools > AriadneTS Environment Setup
+  Install/Change Project Node.js Toolchain
+  Diagnose TypeScript Environment
+  Initialize TypeScript Workspace
+  Install Local TypeScript Compiler
+  Install VSCode Debugger And Config
+
+Tools > AriadneTS Package Signing And Build
+  Generate Development Private Key
+  Build TypeScript Package
+
+Tools > AriadneTS Runtime And Debugging
+  Create VSCode Debug Config
+  Create Runtime Host
 ```
+
+These groups mirror the Unity **Script Tools** window: environment setup owns
+project Node.js toolchain install, Node/npm diagnostics, workspace
+initialization, local TypeScript compiler install, and VSCode setup; package
+signing and build owns the private key and `.bytes` package; runtime and
+debugging owns launch config and runtime host creation.
+
+For repeatable project setup, use **Install/Change Project Node.js Toolchain** to
+download the configured **Node Version** under `AriadneTS/Toolchain/node/` at
+the Unreal project root. The default **Node Executable** and **Npm Executable**
+settings point there so editor tools use the project toolchain instead of the
+global shell environment.
 
 Configure defaults in:
 

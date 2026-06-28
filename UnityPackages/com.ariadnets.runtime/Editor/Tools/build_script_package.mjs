@@ -6,6 +6,7 @@ import path from "node:path";
 
 const args = parseArgs(process.argv.slice(2));
 const minimumTypeScriptVersion = { major: 5, minor: 0 };
+const debugMetadataPath = "debug-metadata.json";
 
 if (args["generate-private-key"]) {
   await generatePrivateKey(args["private-key"]);
@@ -24,7 +25,7 @@ const version = requireText(args.version, "--version");
 const buildNumber = parseBuildNumber(args["build-number"]);
 const privateKeyPath = requirePath(args["private-key"], "--private-key");
 const outputPackagePath = requireText(args.output, "--output");
-const requiredRuntimeAbiVersion = Number.parseInt(args["required-abi"] ?? "4", 10);
+const requiredRuntimeAbiVersion = Number.parseInt(args["required-abi"] ?? "5", 10);
 const distDirectory = path.join(tsRoot, "dist");
 
 await rm(distDirectory, { recursive: true, force: true });
@@ -33,6 +34,7 @@ run(tsc.command, [...tsc.args, "-p", "tsconfig.json"], tsRoot);
 await instrumentDebugProbes(distDirectory);
 await validateRuntimeJavaScript(distDirectory);
 const entryModule = args.entry ?? resolveDefaultEntryModule(distDirectory);
+await writeDebugMetadata(tsRoot, distDirectory, version, buildNumber, entryModule);
 
 const manifestBytes = await createManifest(
   distDirectory,
@@ -203,6 +205,76 @@ async function createManifest(
   return manifestBytes;
 }
 
+async function writeDebugMetadata(tsRoot, distDirectory, version, buildNumber, entryModule) {
+  const modules = [];
+  const probes = [];
+  for (const relativePath of await listRuntimeFiles(distDirectory)) {
+    const normalizedPath = relativePath.replaceAll(path.sep, "/");
+    if (!normalizedPath.endsWith(".js")) {
+      continue;
+    }
+
+    const source = await readFile(path.join(distDirectory, relativePath), "utf8");
+    const sourceMapPath = `${normalizedPath}.map`;
+    modules.push({
+      Path: normalizedPath,
+      SourceMapPath: existsSync(path.join(distDirectory, `${relativePath}.map`))
+        ? sourceMapPath
+        : "",
+      DynamicBreakpoints: shouldInstrumentDynamicBreakpoints(relativePath),
+    });
+
+    const lines = source.split(/\r?\n/);
+    for (let index = 0; index < lines.length; ++index) {
+      const probe = parseDebugProbeLine(lines[index]);
+      if (!probe) {
+        continue;
+      }
+      probes.push({
+        Id: probes.length + 1,
+        Kind: probe.kind,
+        Module: normalizedPath,
+        GeneratedLine: index + 1,
+        Source: probe.source,
+        Line: probe.line,
+        Column: probe.column,
+        Function: probe.functionName,
+      });
+    }
+  }
+
+  const metadata = {
+    SchemaVersion: 1,
+    PackageVersion: version,
+    BuildNumber: buildNumber,
+    EntryModule: entryModule,
+    Modules: modules,
+    Probes: probes,
+  };
+  const contents = `${JSON.stringify(metadata, null, 2)}\n`;
+  await writeFile(path.join(distDirectory, debugMetadataPath), contents, "utf8");
+  const debuggerDirectory = path.join(tsRoot, ".ariadnets");
+  await mkdir(debuggerDirectory, { recursive: true });
+  await writeFile(path.join(debuggerDirectory, debugMetadataPath), contents, "utf8");
+}
+
+function parseDebugProbeLine(line) {
+  const match = line.match(
+    /globalThis\.__ariadnets_debug_(line|checkpoint)\("((?:\\"|[^"])*)",\s*(\d+),\s*(\d+),\s*"((?:\\"|[^"])*)"/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  return {
+    kind: match[1] === "checkpoint" ? "checkpoint" : "line",
+    source: JSON.parse(`"${match[2]}"`),
+    line: Number.parseInt(match[3], 10),
+    column: Number.parseInt(match[4], 10),
+    functionName: JSON.parse(`"${match[5]}"`),
+  };
+}
+
 async function instrumentDebugProbes(distDirectory) {
   for (const relativePath of await listRuntimeFiles(distDirectory)) {
     if (!relativePath.endsWith(".js")) {
@@ -288,8 +360,7 @@ function shouldInstrumentDynamicBreakpointLine(line, debugState) {
     trimmed.startsWith("}") ||
     trimmed.startsWith("{") ||
     trimmed.startsWith("globalThis.__ariadnets_debug_") ||
-    trimmed.includes("sourceMappingURL") ||
-    trimmed.endsWith("{")
+    trimmed.includes("sourceMappingURL")
   ) {
     return false;
   }
@@ -298,11 +369,24 @@ function shouldInstrumentDynamicBreakpointLine(line, debugState) {
     return false;
   }
 
-  return trimmed.endsWith(";");
+  return trimmed.endsWith(";") || isMultilineExecutableStatementStart(trimmed);
+}
+
+function isMultilineExecutableStatementStart(trimmed) {
+  if (!/[\(\{\[]\s*$/.test(trimmed)) {
+    return false;
+  }
+
+  return (
+    /^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=/.test(trimmed) ||
+    /^(?:return|throw)\b/.test(trimmed) ||
+    /^(?:await\s+)?(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*\s*\(/.test(trimmed)
+  );
 }
 
 function updateDebugState(state, line) {
   const code = stripLineStringsAndComments(line);
+  addLeadingDeclaredDebugVariables(state, code);
   for (let index = 0; index < code.length; ++index) {
     const character = code[index];
     if (character === "{") {
@@ -417,8 +501,16 @@ function addDeclaredDebugVariables(state, code) {
   }
 }
 
+function addLeadingDeclaredDebugVariables(state, code) {
+  if (!/^\s*(?:const|let|var)\s+/.test(code)) {
+    return;
+  }
+
+  addDeclaredDebugVariables(state, code);
+}
+
 function parseDeclaredDebugVariables(code) {
-  const declaration = code.match(/\b(?:const|let|var)\s+(.+?)(?:;|$)/);
+  const declaration = code.trimEnd().match(/\b(?:const|let|var)\s+(.+?)(?:;|$)/);
   if (!declaration) {
     return [];
   }
@@ -477,7 +569,7 @@ function createDebugVariablesCapture(state) {
   const assignments = variables.map((name) =>
     `try{__s(${JSON.stringify(name)},${name});}catch{__v[${JSON.stringify(name)}]="<unavailable>";}`,
   ).join("");
-  return `(()=>{const __v={};const __seen=[];const __p=(v)=>{const t=typeof v;if(t==="undefined")return "<undefined>";if(t==="bigint")return v.toString()+"n";if(t==="symbol")return String(v);if(t==="function")return "[Function"+(v.name?" "+v.name:"")+"]";return v;};const __c=(v,d)=>{try{v=__p(v);if(v===null||typeof v!=="object")return v;if(d<=0)return Array.isArray(v)?"Array":"Object";if(__seen.indexOf(v)>=0)return "<circular>";__seen.push(v);if(Array.isArray(v)){const a=[];for(let i=0;i<Math.min(v.length,32);++i)a.push(__c(v[i],d-1));if(v.length>32)a.push("...");return a;}const o={};let n=0;for(const k of Object.keys(v)){if(n++>=32){o["..."]="...";break;}o[k]=__c(v[k],d-1);}return o;}catch{return "<unavailable>";}};const __s=(n,v)=>{__v[n]=__c(v,2);};${assignments}return __v;})()`;
+  return `(()=>{const __v={};const __seen=[];const __p=(v)=>{const t=typeof v;if(t==="undefined")return "<undefined>";if(t==="bigint")return v.toString()+"n";if(t==="symbol")return String(v);if(t==="function")return "[Function"+(v.name?" "+v.name:"")+"]";return v;};const __k=(v,g)=>{const r=[];const a=(k)=>{if(typeof k==="string"&&r.indexOf(k)<0)r.push(k);};for(const k of Object.keys(v))a(k);if(g){let p=Object.getPrototypeOf(v);let h=0;while(p&&p!==Object.prototype&&h++<4){for(const k of Object.getOwnPropertyNames(p)){if(k==="constructor")continue;const d=Object.getOwnPropertyDescriptor(p,k);if(d&&typeof d.get==="function")a(k);}p=Object.getPrototypeOf(p);}}return r;};const __c=(v,d,g)=>{try{v=__p(v);if(v===null||typeof v!=="object")return v;if(d<=0)return Array.isArray(v)?"Array":"Object";if(__seen.indexOf(v)>=0)return "<circular>";__seen.push(v);if(Array.isArray(v)){const a=[];for(let i=0;i<Math.min(v.length,32);++i)a.push(__c(v[i],d-1,0));if(v.length>32)a.push("...");return a;}const o={};let n=0;for(const k of __k(v,g)){if(n++>=32){o["..."]="...";break;}try{o[k]=__c(v[k],d-1,0);}catch{o[k]="<unavailable>";}}return o;}catch{return "<unavailable>";}};const __s=(n,v)=>{__v[n]=__c(v,2,1);};${assignments}return __v;})`;
 }
 
 function stripLineStringsAndComments(line) {
@@ -712,7 +804,7 @@ async function listRuntimeFiles(directory, relativeDirectory = "") {
     const relativePath = path.join(relativeDirectory, entry.name);
     if (entry.isDirectory()) {
       results.push(...await listRuntimeFiles(directory, relativePath));
-    } else if (entry.name.endsWith(".js") || entry.name.endsWith(".js.map")) {
+    } else if (entry.name.endsWith(".js") || entry.name.endsWith(".js.map") || relativePath === debugMetadataPath) {
       results.push(relativePath);
     }
   }
